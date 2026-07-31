@@ -1,0 +1,2152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Myshot — screenshot darkroom</title>
+<meta name="description" content="Turn a raw screenshot into something worth shipping. Padding, corner radius, shadow and backgrounds, rendered entirely on your machine.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230E0E10'/%3E%3Crect x='7' y='8.5' width='18' height='13' rx='3' fill='%23E8A05C'/%3E%3Crect x='7' y='8.5' width='18' height='13' rx='3' fill='none' stroke='%23000' stroke-opacity='.25'/%3E%3C/svg%3E">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   MYSHOT — "darkroom": the app is the instrument, the artwork is the print.
+   Warm graphite chrome, a single safelight-amber accent, platform type.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+:root{
+  --ink-900:#0B0B0D;
+  --ink-850:#0F0F11;
+  --ink-800:#141416;
+  --ink-780:#17171A;
+  --ink-750:#1B1C1F;
+  --ink-700:#25262A;
+
+  --line:rgba(255,255,255,.065);
+  --line-2:rgba(255,255,255,.11);
+
+  --text:#EDE9E1;
+  --dim:#A7A197;      /* 7.3:1 on the panel */
+  --faint:#8A8478;    /* 5.0:1 — these labels are 10–11px, so they still owe AA */
+
+  --amber:#E8A05C;
+  --amber-lit:#F6BC80;
+  --amber-glow:rgba(232,160,92,.22);
+
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Helvetica Neue",sans-serif;
+  --serif:ui-serif,"New York","Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+
+  --r-sm:6px; --r-md:9px; --r-lg:14px;
+  --ease:cubic-bezier(.22,.72,.2,1);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--ink-900);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:13px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  overflow:hidden;
+  overscroll-behavior:none;
+}
+/* film grain over the chrome — the same trick the artwork uses, at 1/10th strength */
+body::after{
+  content:"";position:fixed;inset:0;z-index:60;pointer-events:none;opacity:.035;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+::selection{background:rgba(232,160,92,.28)}
+
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;border:none;background:none;padding:0}
+[hidden]{display:none!important}   /* class-level display rules must not resurrect hidden nodes */
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:3px}
+
+/* ── shell ─────────────────────────────────────────────────────────────── */
+.app{
+  height:100dvh;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 344px;
+  grid-template-rows:auto minmax(0,1fr);
+}
+
+.topbar{
+  grid-column:1/-1;
+  display:flex;align-items:center;gap:12px;
+  height:52px;padding:0 16px 0 20px;
+  border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#131315,#0F0F11);
+  position:relative;z-index:5;
+}
+.brand{display:flex;align-items:baseline;gap:9px;min-width:0}
+.mark{
+  width:15px;height:11px;border-radius:3px;align-self:center;
+  background:linear-gradient(160deg,var(--amber-lit),#C8783C);
+  box-shadow:0 0 0 1px rgba(0,0,0,.5),0 0 14px -2px var(--amber-glow);
+}
+.wordmark{font-family:var(--serif);font-size:16px;letter-spacing:.005em}
+.wordmark i{font-style:normal;color:var(--amber)}
+.brand-sub{
+  font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+  padding-left:12px;border-left:1px solid var(--line);align-self:center;
+}
+.spacer{flex:1}
+.chip{
+  display:flex;align-items:center;gap:7px;max-width:230px;
+  font:11px/1 var(--mono);color:var(--dim);
+  padding:6px 10px;border:1px solid var(--line);border-radius:99px;background:var(--ink-850);
+}
+.chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip.priv{color:var(--faint);letter-spacing:.02em}
+.chip.priv i{width:5px;height:5px;border-radius:50%;background:#5FBE8B;box-shadow:0 0 8px #5FBE8B}
+
+/* ── stage ─────────────────────────────────────────────────────────────── */
+.stage{
+  position:relative;min-width:0;min-height:0;
+  display:grid;place-items:center;
+  padding:46px 52px;
+  background:radial-gradient(115% 95% at 50% -12%,#18181C 0%,#0C0C0E 58%,#0A0A0B 100%);
+}
+/* crop marks — trim guides on a proof sheet */
+.marks{position:absolute;inset:22px 26px;pointer-events:none}
+.marks i{position:absolute;width:14px;height:14px;border:0 solid rgba(255,255,255,.13)}
+.marks i:nth-child(1){top:0;left:0;border-top-width:1px;border-left-width:1px}
+.marks i:nth-child(2){top:0;right:0;border-top-width:1px;border-right-width:1px}
+.marks i:nth-child(3){bottom:0;left:0;border-bottom-width:1px;border-left-width:1px}
+.marks i:nth-child(4){bottom:0;right:0;border-bottom-width:1px;border-right-width:1px}
+
+.shotwrap{position:relative;max-width:100%;max-height:100%;display:grid;place-items:center;min-width:0;min-height:0}
+#overlay{position:absolute;left:0;top:0;touch-action:none}
+.stage.empty #overlay{display:none}
+#shot{
+  display:block;max-width:100%;max-height:100%;
+  border-radius:3px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.055),0 48px 90px -46px rgba(0,0,0,.95);
+  transition:opacity .2s var(--ease);
+}
+#shot.alpha{
+  background-color:#151517;
+  background-image:
+    linear-gradient(45deg,#1E1E21 25%,transparent 25%,transparent 75%,#1E1E21 75%),
+    linear-gradient(45deg,#1E1E21 25%,transparent 25%,transparent 75%,#1E1E21 75%);
+  background-size:18px 18px;background-position:0 0,9px 9px;
+}
+.stage.empty #shot{display:none}
+
+/* empty state */
+.empty-ui{display:none;text-align:center;max-width:420px}
+.stage.empty .empty-ui{display:block}
+.empty-ui .glyph{
+  width:60px;height:44px;margin:0 auto 22px;border-radius:9px;
+  border:1px dashed rgba(255,255,255,.22);
+  background:linear-gradient(160deg,rgba(232,160,92,.14),rgba(232,160,92,.02));
+  box-shadow:0 20px 40px -28px #000;
+  position:relative;
+}
+.empty-ui .glyph::after{
+  content:"";position:absolute;inset:8px 8px 10px;border-radius:4px;
+  background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,.03));
+}
+.empty-ui h1{
+  font-family:var(--serif);font-weight:400;font-size:27px;line-height:1.2;
+  margin:0 0 10px;letter-spacing:-.005em;
+}
+.empty-ui p{margin:0 auto 22px;color:var(--dim);max-width:330px;font-size:13px}
+.empty-ui .kbd-line{margin-top:18px;color:var(--faint);font-size:11.5px}
+.row-c{display:flex;gap:9px;justify-content:center}
+
+kbd{
+  font:10.5px/1 var(--mono);color:var(--dim);
+  padding:3px 5px;border-radius:4px;border:1px solid var(--line-2);background:var(--ink-780);
+}
+
+/* ── inspector ─────────────────────────────────────────────────────────── */
+.inspector{
+  display:flex;flex-direction:column;min-height:0;
+  border-left:1px solid var(--line);
+  background:linear-gradient(180deg,#141416 0%,#101012 100%);
+}
+.insp-scroll{flex:1;min-height:0;overflow-y:auto;padding:20px 18px 10px;scrollbar-width:thin;scrollbar-color:#2A2B2F transparent}
+.insp-scroll::-webkit-scrollbar{width:9px}
+.insp-scroll::-webkit-scrollbar-thumb{background:#26272B;border-radius:9px;border:3px solid transparent;background-clip:padding-box}
+
+.grp{margin-bottom:26px}
+.grp>h2{
+  display:flex;align-items:center;gap:10px;margin:0 0 13px;
+  font:600 10px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--faint);
+}
+.grp>h2::after{content:"";flex:1;height:1px;background:var(--line);box-shadow:0 1px 0 rgba(255,255,255,.028)}
+
+.field{margin-bottom:15px}
+.field:last-child{margin-bottom:0}
+.field-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px}
+.field-head label{font-size:12.5px;color:var(--text)}
+.field-head output{font:11px/1 var(--mono);color:var(--dim);font-variant-numeric:tabular-nums}
+
+/* sliders */
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:18px;margin:0;background:transparent;display:block;
+}
+input[type=range]::-webkit-slider-runnable-track{
+  height:4px;border-radius:2px;
+  background:linear-gradient(90deg,var(--amber) 0 var(--fill,50%),rgba(255,255,255,.10) var(--fill,50%) 100%);
+  box-shadow:inset 0 1px 1.5px rgba(0,0,0,.65);
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:50%;
+  background:linear-gradient(180deg,#FFFDF9,#D6D1C7);
+  box-shadow:0 1px 2px rgba(0,0,0,.75),0 0 0 1px rgba(0,0,0,.4);
+  transition:box-shadow .16s var(--ease),transform .16s var(--ease);
+}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.09)}
+input[type=range]:active::-webkit-slider-thumb{box-shadow:0 1px 2px rgba(0,0,0,.75),0 0 0 1px rgba(0,0,0,.4),0 0 0 6px var(--amber-glow)}
+input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:rgba(255,255,255,.10)}
+input[type=range]::-moz-range-progress{height:4px;border-radius:2px;background:var(--amber)}
+input[type=range]::-moz-range-thumb{width:13px;height:13px;border:none;border-radius:50%;background:#FFFDF9;box-shadow:0 1px 2px rgba(0,0,0,.7)}
+input[type=range]:focus-visible{outline:none}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(--ink-800),0 0 0 4px var(--amber)}
+
+/* segmented control */
+.seg{
+  position:relative;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;
+  padding:2px;border-radius:var(--r-md);background:#0C0C0E;border:1px solid var(--line);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
+}
+.seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.seg label{
+  text-align:center;padding:6px 2px;border-radius:7px;cursor:pointer;
+  font-size:11.5px;color:var(--dim);white-space:nowrap;
+  transition:background .16s var(--ease),color .16s var(--ease);
+}
+.seg label:hover{color:var(--text)}
+.seg input:checked+label{
+  background:linear-gradient(180deg,#2A2B2F,#232428);color:var(--text);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 1px 2px rgba(0,0,0,.4);
+}
+.seg input:focus-visible+label{outline:2px solid var(--amber);outline-offset:-1px}
+
+/* tool palette */
+.tools{
+  position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:3px;
+  padding:3px;border-radius:var(--r-md);background:#0C0C0E;border:1px solid var(--line);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
+}
+.tools input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.tools label{
+  display:grid;justify-items:center;gap:3px;padding:6px 0 5px;border-radius:7px;cursor:pointer;
+  font-size:9.5px;letter-spacing:.02em;color:var(--dim);
+  transition:background .16s var(--ease),color .16s var(--ease);
+}
+.tools label svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tools label:hover{color:var(--text)}
+.tools input:checked+label{
+  background:linear-gradient(180deg,#2F2A22,#272219);color:var(--amber-lit);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 1px 2px rgba(0,0,0,.4);
+}
+.tools input:focus-visible+label{outline:2px solid var(--amber);outline-offset:-1px}
+
+.cropbar{
+  display:flex;align-items:center;gap:7px;margin-top:9px;padding:7px 8px 7px 11px;
+  border-radius:var(--r-md);background:rgba(232,160,92,.07);
+  box-shadow:inset 0 0 0 1px rgba(232,160,92,.22);
+  font:11px/1 var(--mono);color:var(--amber-lit);font-variant-numeric:tabular-nums;
+}
+.cropbar .spacer{flex:1}
+.cropbar .btn{height:26px;padding:0 9px;font-size:11px}
+
+.colors{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.colors label{position:relative;display:block;cursor:pointer}
+.colors input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.colors .dot{
+  display:block;aspect-ratio:1;border-radius:50%;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.4);
+  transition:transform .16s var(--ease),box-shadow .16s var(--ease);
+}
+.colors label:hover .dot{transform:translateY(-1px)}
+.colors input:checked+.dot{box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber)}
+.colors input:focus-visible+.dot{box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber-lit)}
+
+/* swatches */
+.swatches{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.swatch{position:relative;display:block;cursor:pointer;border-radius:8px}
+.swatch input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.swatch .sw{
+  display:block;aspect-ratio:1;border-radius:8px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.10);
+  transition:transform .16s var(--ease),box-shadow .16s var(--ease);
+}
+.swatch .sw canvas{display:block;width:100%;height:100%}
+.swatch:hover .sw{transform:translateY(-1px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
+.swatch input:checked+.sw{box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber)}
+.swatch input:focus-visible+.sw{box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber-lit)}
+
+.custom-row{display:flex;align-items:center;gap:9px;margin-top:11px}
+input[type=color]{
+  -webkit-appearance:none;appearance:none;
+  width:32px;height:32px;padding:0;border:none;border-radius:8px;background:none;cursor:pointer;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16);
+}
+input[type=color]::-webkit-color-swatch-wrapper{padding:3px}
+input[type=color]::-webkit-color-swatch{border:none;border-radius:6px}
+input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
+.hex{
+  flex:1;min-width:0;height:32px;padding:0 10px;
+  font:11.5px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;
+  background:#0C0C0E;border:1px solid var(--line);border-radius:8px;color:var(--text);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
+}
+.hex:focus{outline:none;border-color:rgba(232,160,92,.5);box-shadow:inset 0 1px 2px rgba(0,0,0,.5),0 0 0 3px var(--amber-glow)}
+
+/* switch */
+.switch{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;padding:3px 0}
+.switch .txt{font-size:12.5px}
+.switch .txt small{display:block;color:var(--faint);font-size:11px;margin-top:1px}
+.switch input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.track{
+  flex:none;width:34px;height:20px;border-radius:99px;background:#0C0C0E;position:relative;
+  box-shadow:inset 0 0 0 1px var(--line-2),inset 0 1px 2px rgba(0,0,0,.6);
+  transition:background .18s var(--ease),box-shadow .18s var(--ease);
+}
+.track::after{
+  content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;
+  background:linear-gradient(180deg,#8F8B83,#6E6A63);
+  transition:transform .18s var(--ease),background .18s var(--ease);
+}
+.switch input:checked+.track{background:linear-gradient(180deg,#C9843F,#A9682E);box-shadow:inset 0 0 0 1px rgba(0,0,0,.4),0 0 12px -4px var(--amber-glow)}
+.switch input:checked+.track::after{transform:translateX(14px);background:linear-gradient(180deg,#FFF8EF,#F1E4D4)}
+.switch input:focus-visible+.track{outline:2px solid var(--amber);outline-offset:2px}
+
+/* buttons */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  height:36px;padding:0 14px;border-radius:var(--r-md);
+  font-size:12.5px;font-weight:500;white-space:nowrap;
+  transition:transform .12s var(--ease),background .16s var(--ease),box-shadow .16s var(--ease),opacity .16s var(--ease);
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{
+  background:linear-gradient(180deg,#F3B274,#DE9047);color:#22150A;font-weight:600;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.42),0 1px 2px rgba(0,0,0,.5),0 10px 24px -14px rgba(232,160,92,.9);
+}
+.btn-primary:hover{background:linear-gradient(180deg,#F7BC83,#E59A51)}
+.btn-ghost{background:var(--ink-750);color:var(--text);box-shadow:inset 0 0 0 1px var(--line-2),0 1px 2px rgba(0,0,0,.35)}
+.btn-ghost:hover{background:#212227}
+.btn-quiet{height:30px;padding:0 11px;font-size:12px;background:var(--ink-780);color:var(--dim);box-shadow:inset 0 0 0 1px var(--line)}
+.btn-quiet:hover{color:var(--text);background:var(--ink-750)}
+.btn[aria-disabled=true]{opacity:.38;pointer-events:none}
+.btn svg{width:14px;height:14px;flex:none}
+
+/* inspector footer */
+.insp-foot{
+  border-top:1px solid var(--line);
+  background:linear-gradient(180deg,#111113,#0D0D0F);
+  padding:14px 18px 16px;display:grid;gap:12px;
+  /* reads as the panel continuing underneath — the cue that the list scrolls */
+  box-shadow:0 -14px 22px -14px rgba(0,0,0,.85);
+}
+.foot-lbl{font:600 10px/1 var(--sans);letter-spacing:.13em;text-transform:uppercase;color:var(--faint)}
+.actions{display:grid;grid-template-columns:1.45fr 1fr;gap:8px}
+.meta{
+  display:flex;justify-content:space-between;gap:10px;
+  font:10.5px/1.5 var(--mono);color:var(--faint);font-variant-numeric:tabular-nums;
+}
+.meta b{font-weight:400;color:var(--dim)}
+.hints{display:flex;gap:10px;flex-wrap:wrap;font-size:10.5px;color:var(--faint);align-items:center}
+.hints span{display:flex;gap:4px;align-items:center}
+
+/* ── overlays ──────────────────────────────────────────────────────────── */
+.veil{
+  position:fixed;inset:0;z-index:50;display:grid;place-items:center;
+  background:rgba(9,9,11,.74);-webkit-backdrop-filter:blur(7px);backdrop-filter:blur(7px);
+  opacity:0;pointer-events:none;transition:opacity .16s var(--ease);
+}
+.veil.on{opacity:1}
+.veil .frame{
+  border:1.5px dashed rgba(232,160,92,.65);border-radius:18px;
+  padding:38px 60px;text-align:center;background:rgba(20,20,22,.6);
+  box-shadow:0 40px 90px -40px #000;
+}
+.veil .frame strong{display:block;font-family:var(--serif);font-weight:400;font-size:22px;margin-bottom:6px}
+.veil .frame span{color:var(--dim);font-size:12.5px}
+
+.toast{
+  position:fixed;left:50%;bottom:26px;z-index:70;
+  display:flex;align-items:center;gap:12px;
+  padding:11px 14px;border-radius:11px;
+  background:rgba(28,28,32,.94);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  box-shadow:inset 0 0 0 1px var(--line-2),0 24px 50px -20px rgba(0,0,0,.9);
+  font-size:12.5px;
+  transform:translate(-50%,14px);opacity:0;pointer-events:none;
+  transition:opacity .2s var(--ease),transform .2s var(--ease);
+  max-width:min(520px,calc(100vw - 32px));
+}
+.toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.toast .dot{width:6px;height:6px;border-radius:50%;background:#5FBE8B;flex:none;box-shadow:0 0 10px #5FBE8B}
+.toast.warn .dot{background:var(--amber);box-shadow:0 0 10px var(--amber)}
+.toast.err .dot{background:#E8695C;box-shadow:0 0 10px #E8695C}
+.toast .msg{min-width:0}
+
+/* ── motion ────────────────────────────────────────────────────────────── */
+@keyframes rise{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.topbar{animation:fade .5s var(--ease) both}
+.stage{animation:fade .6s var(--ease) .05s both}
+.inspector{animation:rise .55s var(--ease) .1s both}
+.empty-ui>*{animation:rise .5s var(--ease) both}
+.empty-ui>*:nth-child(1){animation-delay:.14s}
+.empty-ui>*:nth-child(2){animation-delay:.2s}
+.empty-ui>*:nth-child(3){animation-delay:.26s}
+.empty-ui>*:nth-child(4){animation-delay:.32s}
+.empty-ui>*:nth-child(5){animation-delay:.38s}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-delay:0!important;transition-duration:.001ms!important}
+}
+
+/* ── narrow ────────────────────────────────────────────────────────────── */
+@media (max-width:900px){
+  body{overflow:auto}
+  .app{height:auto;min-height:100dvh;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(300px,52vh) auto}
+  .inspector{border-left:none;border-top:1px solid var(--line)}
+  .insp-scroll{overflow:visible}
+  .stage{padding:26px}
+  .brand-sub{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="wordmark">Myshot<i>.</i></span>
+    </div>
+    <span class="brand-sub">Screenshot darkroom</span>
+    <span class="spacer"></span>
+    <span class="chip" id="fileChip" hidden><span class="nm" id="fileName"></span></span>
+    <span class="chip priv" title="No uploads, no server. Everything happens in this tab."><i aria-hidden="true"></i>on-device</span>
+  </header>
+
+  <main class="stage empty" id="stage">
+    <div class="marks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+    <div class="shotwrap" id="shotWrap">
+      <canvas id="shot" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
+      <canvas id="overlay" aria-hidden="true"></canvas>
+    </div>
+
+    <div class="empty-ui" id="emptyUI">
+      <div class="glyph" aria-hidden="true"></div>
+      <h1>Drop a screenshot.</h1>
+      <p>It never leaves this tab. Paste one with <kbd>⌘V</kbd>, drag a file anywhere on the page, or start from a sample.</p>
+      <div class="row-c">
+        <button class="btn btn-primary" id="pickBtn">Choose file…</button>
+        <button class="btn btn-ghost" id="sampleBtn">Use a sample</button>
+      </div>
+      <div class="kbd-line">PNG · JPEG · WebP · GIF · HEIC (whatever your browser can decode)</div>
+    </div>
+  </main>
+
+  <aside class="inspector">
+    <div class="insp-scroll">
+
+      <section class="grp">
+        <h2>Image</h2>
+        <div class="row-c" style="justify-content:flex-start">
+          <button class="btn btn-quiet" id="pickBtn2">Open…</button>
+          <button class="btn btn-quiet" id="sampleBtn2">Sample</button>
+          <button class="btn btn-quiet" id="clearBtn" aria-disabled="true">Clear</button>
+        </div>
+      </section>
+
+      <section class="grp">
+        <h2>Tools</h2>
+        <div class="tools" id="toolSeg" role="group" aria-label="Editing tool"></div>
+
+        <div class="cropbar" id="cropBar" hidden>
+          <span id="cropDims">—</span>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" id="cropDone">Done</button>
+          <button class="btn btn-quiet" id="cropReset">Reset</button>
+        </div>
+
+        <div class="field" style="margin-top:13px">
+          <div class="field-head"><span style="font-size:12.5px" id="colorLbl">Colour</span></div>
+          <div class="colors" id="colorRow" role="radiogroup" aria-labelledby="colorLbl"></div>
+        </div>
+
+        <div class="field">
+          <div class="field-head"><label for="weight">Weight</label><output id="weightOut" aria-live="off" for="weight">—</output></div>
+          <input type="range" id="weight" min="10" max="100" step="1" aria-describedby="weightOut">
+        </div>
+
+        <div class="row-c" style="justify-content:flex-start">
+          <button class="btn btn-quiet" id="undoBtn" aria-disabled="true">Undo</button>
+          <button class="btn btn-quiet" id="clearShapes" aria-disabled="true">Clear all</button>
+        </div>
+      </section>
+
+      <section class="grp">
+        <h2>Frame</h2>
+
+        <div class="field">
+          <div class="field-head"><label for="padding">Padding</label><output id="paddingOut" aria-live="off" for="padding">—</output></div>
+          <input type="range" id="padding" min="0" max="22" step="0.5" aria-describedby="paddingOut">
+        </div>
+
+        <div class="field">
+          <div class="field-head"><label for="radius">Corner radius</label><output id="radiusOut" aria-live="off" for="radius">—</output></div>
+          <input type="range" id="radius" min="0" max="100" step="1" aria-describedby="radiusOut">
+        </div>
+
+        <div class="field">
+          <div class="field-head"><span class="field-head-label" id="ratioLbl" style="font-size:12.5px">Canvas ratio</span></div>
+          <div class="seg" id="ratioSeg" role="group" aria-labelledby="ratioLbl"></div>
+        </div>
+      </section>
+
+      <section class="grp">
+        <h2>Light</h2>
+
+        <div class="field">
+          <div class="field-head"><label for="shadow">Shadow</label><output id="shadowOut" aria-live="off" for="shadow">—</output></div>
+          <input type="range" id="shadow" min="0" max="100" step="1" aria-describedby="shadowOut">
+        </div>
+
+        <label class="switch">
+          <span class="txt">Edge definition<small>Hairline that separates the image from the background</small></span>
+          <input type="checkbox" id="edge"><span class="track" aria-hidden="true"></span>
+        </label>
+      </section>
+
+      <section class="grp">
+        <h2>Background</h2>
+        <div class="swatches" id="swatches" role="radiogroup" aria-label="Background preset"></div>
+
+        <div class="custom-row">
+          <input type="color" id="customColor" aria-label="Custom background colour">
+          <input type="text" class="hex" id="customHex" spellcheck="false" autocomplete="off" aria-label="Custom background hex value" maxlength="7">
+        </div>
+
+        <div style="height:12px"></div>
+        <label class="switch">
+          <span class="txt">Grain<small>Fine dither — stops gradients from banding</small></span>
+          <input type="checkbox" id="grain"><span class="track" aria-hidden="true"></span>
+        </label>
+      </section>
+
+    </div>
+
+    <div class="insp-foot">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <span class="foot-lbl" id="scaleLbl">Export scale</span>
+        <button class="btn btn-quiet" id="resetBtn" style="height:24px;padding:0 9px;font-size:11px">Reset</button>
+      </div>
+      <div class="seg" id="scaleSeg" role="group" aria-labelledby="scaleLbl"></div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="exportBtn" aria-disabled="true">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8v8.4M4.6 6.9 8 10.4l3.4-3.5M2.2 12.1v1.2a.9.9 0 0 0 .9.9h9.8a.9.9 0 0 0 .9-.9v-1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Export PNG
+        </button>
+        <button class="btn btn-ghost" id="copyBtn" aria-disabled="true">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5.4" y="5.4" width="8.4" height="8.4" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M10.6 5.4V4.2a2 2 0 0 0-2-2H4.2a2 2 0 0 0-2 2v4.4a2 2 0 0 0 2 2h1.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Copy
+        </button>
+      </div>
+
+      <div class="meta">
+        <span><b>source</b> <span id="metaSrc">—</span></span>
+        <span><b>export</b> <span id="metaOut">—</span></span>
+      </div>
+
+      <div class="hints">
+        <span><kbd>⌘S</kbd> export</span>
+        <span><kbd>⌘C</kbd> copy</span>
+        <span><kbd>⌘V</kbd> paste</span>
+        <span><kbd>⌘Z</kbd> undo</span>
+        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd> tools</span>
+        <span><kbd>⌫</kbd> delete</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="veil" id="veil" aria-hidden="true">
+  <div class="frame"><strong>Drop it anywhere</strong><span>The new screenshot replaces the current one</span></div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <span class="dot" aria-hidden="true"></span>
+  <span class="msg" id="toastMsg"></span>
+  <button class="btn btn-quiet" id="toastAct" hidden></button>
+</div>
+
+<input type="file" id="filePicker" accept="image/*" aria-label="Choose a screenshot file" hidden>
+
+<noscript>
+  <p style="padding:24px;font-family:sans-serif">Myshot renders everything locally with JavaScript and canvas. Please enable JavaScript.</p>
+</noscript>
+
+<script>
+"use strict";
+(function () {
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   1 · PRESETS
+   Mesh backgrounds are a base fill plus soft radial blobs in *fractional*
+   coordinates, so a preset re-flows correctly at any canvas aspect ratio.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var BACKGROUNDS = [
+  { id:'lagoon', name:'Lagoon', kind:'mesh', base:'#062830', blobs:[
+      {x:.14,y:.86,r:.95,c:'#12707F',a:.95},
+      {x:.82,y:.18,r:.78,c:'#2FB3AC',a:.72},
+      {x:.98,y:.95,r:.66,c:'#0A3A64',a:.72},
+      {x:.22,y:.06,r:.5, c:'#E8A05C',a:.20,mode:'lighter'} ]},
+
+  { id:'aurora', name:'Aurora', kind:'mesh', base:'#080D1E', blobs:[
+      {x:.18,y:.20,r:.85,c:'#1D3C90',a:.82},
+      {x:.86,y:.78,r:.80,c:'#1B9A76',a:.62},
+      {x:.62,y:.02,r:.62,c:'#5A3E93',a:.55},
+      {x:.05,y:.96,r:.5, c:'#0E7C9B',a:.5} ]},
+
+  { id:'ember', name:'Ember', kind:'mesh', base:'#2A0E13', blobs:[
+      {x:.12,y:.9, r:.95,c:'#8E2A21',a:.9},
+      {x:.86,y:.14,r:.75,c:'#E2703A',a:.78},
+      {x:.99,y:.02,r:.42,c:'#F5C86B',a:.5,mode:'lighter'},
+      {x:.44,y:.55,r:.6, c:'#4E121F',a:.55} ]},
+
+  { id:'blush', name:'Blush', kind:'mesh', base:'#F8EFE9', blobs:[
+      {x:.14,y:.16,r:.8, c:'#F7C3B0',a:.9},
+      {x:.9, y:.82,r:.78,c:'#FFDCA8',a:.85},
+      {x:.72,y:.1, r:.55,c:'#EFC0D6',a:.6},
+      {x:.4, y:.98,r:.5, c:'#E9CBBE',a:.5} ]},
+
+  { id:'sage', name:'Sage', kind:'mesh', base:'#EDF1E9', blobs:[
+      {x:.2, y:.88,r:.85,c:'#BFD3B7',a:.9},
+      {x:.88,y:.18,r:.72,c:'#A6C4B4',a:.7},
+      {x:.52,y:.5, r:.6, c:'#E7E5CD',a:.7} ]},
+
+  { id:'noir', name:'Noir', kind:'mesh', base:'#0B0B0D', blobs:[
+      {x:.3, y:.18,r:.95,c:'#26262C',a:.95},
+      {x:.85,y:.9, r:.8, c:'#191920',a:.9},
+      {x:.9, y:.08,r:.45,c:'#4A3524',a:.5,mode:'lighter'} ]},
+
+  { id:'sunset', name:'Sunset', kind:'linear', angle:155, stops:[[0,'#FFC46B'],[.52,'#F07A4E'],[1,'#CF4B67']] },
+  { id:'tide',   name:'Tide',   kind:'linear', angle:145, stops:[[0,'#0A3A63'],[.55,'#1C7FA6'],[1,'#4FC7C2']] },
+  { id:'slate',  name:'Slate',  kind:'linear', angle:160, stops:[[0,'#2C3239'],[1,'#585F69']] },
+
+  { id:'ink',   name:'Ink',   kind:'solid', color:'#17181B' },
+  { id:'bone',  name:'Bone',  kind:'solid', color:'#F1EDE4' },
+  { id:'clay',  name:'Clay',  kind:'solid', color:'#BE6A4A' },
+
+  { id:'transparent', name:'Transparent', kind:'transparent' },
+  { id:'custom', name:'Custom colour', kind:'custom' }
+];
+
+var RATIOS = [
+  { id:'auto', label:'Auto', v:null, hint:'Fit the screenshot plus its padding' },
+  { id:'16x9', label:'16:9', v:16/9, hint:'16:9 — slides, video thumbnails' },
+  { id:'4x3',  label:'4:3',  v:4/3,  hint:'4:3 — classic presentation' },
+  { id:'1x1',  label:'1:1',  v:1,    hint:'1:1 — square, for Instagram or a grid' },
+  { id:'2x1',  label:'2:1',  v:2,    hint:'2:1 — X / Twitter post and link-card size' }
+];
+
+var DEFAULTS = {
+  padding: 6.5,       /* % of the image's longest edge */
+  radius:  42,        /* 0-100 → % of the image's shortest edge, ×0.06 */
+  shadow:  55,        /* 0-100 */
+  bg:      'lagoon',
+  custom:  '#1B2430',
+  ratio:   'auto',
+  grain:   true,
+  edge:    true,
+  scale:   2,
+  color:   '#FF453A',   /* annotation colour */
+  weight:  46           /* 10-100 → % of the shortest edge, ×0.016 */
+};
+
+var TOOLS = [
+  { id:'select',  label:'Select',  key:'v', svg:'<path d="M4.5 2.2 12.6 8.4l-4.1.5-1.9 4z"/>' },
+  { id:'crop',    label:'Crop',    key:'c', svg:'<path d="M4.2 1.6v10.2h10.2M1.6 4.2h10.2v10.2"/>' },
+  { id:'arrow',   label:'Arrow',   key:'a', svg:'<path d="M3 13 12.9 3.1M8.3 2.8h4.9v4.9"/>' },
+  { id:'rect',    label:'Box',     key:'r', svg:'<rect x="2.4" y="3.6" width="11.2" height="8.8" rx="1.6"/>' },
+  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' }
+];
+
+var COLORS = ['#FF453A', '#FF9F0A', '#32D74B', '#0A84FF', '#FFFFFF', '#16181B'];
+
+var STORE_KEY = 'myshot.settings.v1';
+var MAX_DIM = 16384;         /* per-axis canvas limit on every current engine */
+var MAX_AREA = 60e6;         /* ~240 MB of RGBA — beyond this, engines start failing quietly */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2 · STATE
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var state = load();
+var source = null;      /* { img, w, h, name } */
+var sourceRev = 0;
+
+/* Editing state lives outside `state` on purpose: it is meaningless without the
+   image, and the image is never persisted. All coordinates below are in the
+   SOURCE image's own pixels, so a shape stays anchored to what it points at
+   through cropping, ratio changes and either export scale. */
+var tool = 'select';
+var crop = null;        /* {x,y,w,h} in source px, or null */
+var cropping = false;   /* in crop mode the full frame is shown, crop applied on exit */
+var shapes = [];        /* {type,x1,y1,x2,y2,color,weight} */
+var draft = null;       /* the shape currently being dragged out */
+var selected = -1;
+var history = [];
+var view = null;        /* geometry of the last preview paint, for hit-testing */
+
+function load () {
+  var s = {};
+  for (var k in DEFAULTS) s[k] = DEFAULTS[k];
+  try {
+    var raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      var saved = JSON.parse(raw);
+      for (var key in DEFAULTS) if (typeof saved[key] === typeof DEFAULTS[key]) s[key] = saved[key];
+    }
+  } catch (e) { /* private mode / disabled storage — defaults are fine */ }
+  if (!bgById(s.bg)) s.bg = DEFAULTS.bg;
+  if (!RATIOS.some(function (r) { return r.id === s.ratio; })) s.ratio = DEFAULTS.ratio;
+  if (s.scale !== 1 && s.scale !== 2) s.scale = DEFAULTS.scale;
+  if (!/^#[0-9a-f]{6}$/i.test(s.custom)) s.custom = DEFAULTS.custom;
+  return s;
+}
+
+var saveTimer = 0;
+function save () {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(function () {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  }, 220);
+}
+
+function bgById (id) {
+  for (var i = 0; i < BACKGROUNDS.length; i++) if (BACKGROUNDS[i].id === id) return BACKGROUNDS[i];
+  return null;
+}
+function activeBg () {
+  var b = bgById(state.bg) || BACKGROUNDS[0];
+  return b.kind === 'custom' ? { kind:'solid', color:state.custom } : b;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3 · CANVAS PRIMITIVES
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function makeCanvas (w, h) {
+  var c = document.createElement('canvas');
+  c.width = Math.max(1, w | 0); c.height = Math.max(1, h | 0);
+  return c;
+}
+
+function roundRectPath (g, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  g.beginPath();
+  if (typeof g.roundRect === 'function') { g.roundRect(x, y, w, h, r); return; }
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y,     x + w, y + h, r);
+  g.arcTo(x + w, y + h, x,     y + h, r);
+  g.arcTo(x,     y + h, x,     y,     r);
+  g.arcTo(x,     y,     x + w, y,     r);
+  g.closePath();
+}
+
+function hexToRgb (hex) {
+  var h = String(hex).replace('#', '');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  var n = parseInt(h, 16);
+  if (isNaN(n)) return [0, 0, 0];
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgba (hex, a) {
+  var c = hexToRgb(hex);
+  return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
+}
+
+/* Some engines skip a draw call whose source rect lands entirely off-canvas —
+   which would also skip its shadow, and the shadow is the whole point of the
+   off-canvas caster trick used below. Probe once, pick the right path. */
+var SHADOW_CASTER_OK = (function () {
+  try {
+    /* willReadFrequently: this canvas exists only to be read back, and without
+       it Chrome logs a readback perf warning on every load */
+    var c = makeCanvas(8, 8), g = c.getContext('2d', { willReadFrequently:true });
+    g.shadowColor = 'rgba(0,0,0,1)'; g.shadowBlur = 0; g.shadowOffsetX = 20;
+    g.fillStyle = '#000'; g.fillRect(-20, 0, 8, 8);
+    return g.getImageData(3, 3, 1, 1).data[3] > 8;
+  } catch (e) { return false; }
+})();
+
+/* ── backgrounds ───────────────────────────────────────────────────────── */
+
+function drawBackground (g, W, H, bg) {
+  if (!bg || bg.kind === 'transparent') return;
+
+  if (bg.kind === 'solid') {
+    g.fillStyle = bg.color; g.fillRect(0, 0, W, H); return;
+  }
+
+  if (bg.kind === 'linear') {
+    var a = bg.angle * Math.PI / 180;
+    var len = Math.abs(W * Math.cos(a)) + Math.abs(H * Math.sin(a));
+    var dx = Math.cos(a) * len / 2, dy = Math.sin(a) * len / 2;
+    var lg = g.createLinearGradient(W / 2 - dx, H / 2 - dy, W / 2 + dx, H / 2 + dy);
+    for (var i = 0; i < bg.stops.length; i++) lg.addColorStop(bg.stops[i][0], bg.stops[i][1]);
+    g.fillStyle = lg; g.fillRect(0, 0, W, H); return;
+  }
+
+  /* mesh */
+  g.fillStyle = bg.base; g.fillRect(0, 0, W, H);
+  var R = Math.max(W, H);
+  for (var b = 0; b < bg.blobs.length; b++) {
+    var o = bg.blobs[b];
+    var cx = o.x * W, cy = o.y * H, rr = Math.max(1, o.r * R);
+    var rg = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
+    rg.addColorStop(0,   rgba(o.c, o.a));
+    rg.addColorStop(.34, rgba(o.c, o.a * .72));
+    rg.addColorStop(.66, rgba(o.c, o.a * .28));
+    rg.addColorStop(1,   rgba(o.c, 0));
+    g.globalCompositeOperation = o.mode || 'source-over';
+    g.fillStyle = rg;
+    g.fillRect(0, 0, W, H);
+  }
+  g.globalCompositeOperation = 'source-over';
+}
+
+/* ── grain ─────────────────────────────────────────────────────────────── */
+
+var grainTile = null;
+function getGrainTile () {
+  if (grainTile) return grainTile;
+  var n = 128, c = makeCanvas(n, n), g = c.getContext('2d');
+  var id = g.createImageData(n, n), d = id.data;
+  for (var i = 0; i < d.length; i += 4) {
+    var v = Math.random() < .5 ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = Math.random() * 13;      /* ±2.5/255 dither — invisible, kills banding */
+  }
+  g.putImageData(id, 0, 0);
+  grainTile = c;
+  return c;
+}
+
+function drawGrain (g, W, H, S) {
+  var pat = g.createPattern(getGrainTile(), 'repeat');
+  if (!pat) return;
+  /* Grain cells track the output scale so preview and export look identical,
+     but never go below 1 device pixel — sub-pixel noise aliases badly. */
+  try { pat.setTransform(new DOMMatrix([Math.max(1, S), 0, 0, Math.max(1, S), 0, 0])); } catch (e) {}
+  g.save();
+  g.fillStyle = pat;
+  g.fillRect(0, 0, W, H);
+  g.restore();
+}
+
+/* ── artwork (the rounded, clipped screenshot) ─────────────────────────── */
+
+var artCache = { key:'', canvas:null };
+var cropCache = { key:'', canvas:null };
+
+/* A cropped region is lifted out at native size once and cached, so that
+   repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
+function croppedSource (C) {
+  if (C.sx === 0 && C.sy === 0 && C.iw === source.w && C.ih === source.h) return source.img;
+  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
+  if (cropCache.key === key && cropCache.canvas) return cropCache.canvas;
+  var c = makeCanvas(C.iw, C.ih), g = c.getContext('2d');
+  g.drawImage(source.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
+  cropCache.key = key; cropCache.canvas = c;
+  return c;
+}
+
+function downscaleSource (img, dw, dh) {
+  /* One giant drawImage downscale aliases; halve repeatedly instead. */
+  var cur = img, cw = img.width, ch = img.height;
+  while (cw > dw * 2 && ch > dh * 2 && cw > 2 && ch > 2) {
+    var nw = Math.max(dw, Math.round(cw / 2)), nh = Math.max(dh, Math.round(ch / 2));
+    var t = makeCanvas(nw, nh), g = t.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(cur, 0, 0, nw, nh);
+    cur = t; cw = nw; ch = nh;
+  }
+  return cur;
+}
+
+function getArtwork (L, S) {
+  var C = L.C;
+  var aw = Math.max(1, Math.round(L.iw * S)), ah = Math.max(1, Math.round(L.ih * S));
+  var r = Math.min(L.radius * S, Math.min(aw, ah) / 2);
+  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
+            '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
+  if (artCache.key === key && artCache.canvas) return artCache.canvas;
+
+  var c = makeCanvas(aw, ah), g = c.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+
+  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(C), aw, ah) : source.img;
+  var heavy = src !== source.img;
+
+  g.save();
+  roundRectPath(g, 0, 0, aw, ah, r);
+  g.clip();
+  if (heavy) g.drawImage(src, 0, 0, aw, ah);
+  else g.drawImage(src, C.sx, C.sy, C.iw, C.ih, 0, 0, aw, ah);
+  g.restore();
+
+  if (state.edge) {
+    var lw = Math.max(1, 1.25 * S);
+    g.save();
+    g.lineWidth = lw;
+    g.strokeStyle = 'rgba(255,255,255,.15)';
+    roundRectPath(g, lw / 2, lw / 2, aw - lw, ah - lw, Math.max(0, r - lw / 2));
+    g.stroke();
+    g.restore();
+  }
+
+  artCache.key = key; artCache.canvas = c;
+  return c;
+}
+
+/* ── shadow ────────────────────────────────────────────────────────────── */
+
+/* Three layers, the way a real window shadow stacks: a wide ambient pool, a
+   tighter key shadow that carries most of the read, and a hairline contact
+   shadow that keeps the bottom edge from floating. */
+function shadowLayers (L) {
+  var t = state.shadow / 100;
+  if (t <= 0) return [];
+  var base = Math.max(L.iw, L.ih);
+  var k = Math.pow(t, 0.8);
+  var layers = [
+    { blur: base * (0.040 + 0.100 * t), dy: base * (0.012 + 0.045 * t), a: 0.30 * k },
+    { blur: base * (0.012 + 0.030 * t), dy: base * (0.004 + 0.016 * t), a: 0.34 * k },
+    { blur: base * 0.0045,              dy: base * 0.0016,              a: 0.22 * k }
+  ];
+  /* A falloff sliced off by the canvas edge reads as a mistake, so the shadow
+     is bounded by the room the padding actually gives it. */
+  var cap = Math.max(L.pad, base * 0.02) * 1.25;
+  for (var i = 0; i < layers.length; i++) {
+    var reach = layers[i].dy + layers[i].blur * 0.6;
+    if (reach > cap) {
+      var f = cap / reach;
+      layers[i].blur *= f; layers[i].dy *= f;
+    }
+  }
+  return layers;
+}
+
+function drawShadow (g, art, ax, ay, L, S) {
+  var layers = shadowLayers(L);
+  if (!layers.length) return;
+  var K = g.canvas.width + 16;
+
+  for (var i = 0; i < layers.length; i++) {
+    var l = layers[i];
+    g.save();
+    g.shadowColor = 'rgba(5,7,11,' + l.a.toFixed(4) + ')';
+    /* shadowBlur / shadowOffset are NOT affected by the CTM, so they are
+       scaled by hand — the reason nothing here uses ctx.scale(). */
+    g.shadowBlur = l.blur * S;
+    g.shadowOffsetY = l.dy * S;
+    if (SHADOW_CASTER_OK) {
+      g.shadowOffsetX = K;
+      g.drawImage(art, ax - K, ay);      /* caster off-canvas: only its shadow lands */
+    } else {
+      g.shadowOffsetX = 0;
+      g.drawImage(art, ax, ay);          /* fallback: caster visible, covered below */
+    }
+    g.restore();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   3b · ANNOTATIONS
+   Drawn in paint(), so they land in the preview and in both export scales from
+   the same code — and *not* in getArtwork(), so drawing a shape never
+   invalidates the (expensive) artwork cache.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function strokeWidth (L, shape) {
+  return (shape.weight / 100) * 0.016 * Math.min(L.iw, L.ih);
+}
+
+function shapeList () {
+  return draft ? shapes.concat([draft]) : shapes;
+}
+
+/* source px → output px */
+function mapPoint (L, S, ax, ay, x, y) {
+  return [ax + (x - L.C.sx) * S, ay + (y - L.C.sy) * S];
+}
+
+function drawShapes (g, L, S, ax, ay) {
+  var list = shapeList();
+  if (!list.length) return;
+
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var w = Math.max(1, strokeWidth(L, s) * S);
+    var a = mapPoint(L, S, ax, ay, s.x1, s.y1);
+    var b = mapPoint(L, S, ax, ay, s.x2, s.y2);
+
+    g.save();
+    g.strokeStyle = s.color; g.fillStyle = s.color;
+    g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
+    /* a soft drop shadow is what keeps an annotation legible over both a white
+       panel and a dark terminal, without a second outline colour */
+    g.shadowColor = 'rgba(0,0,0,.30)';
+    g.shadowBlur = w * 1.6;
+    g.shadowOffsetY = w * 0.35;
+
+    if (s.type === 'arrow') drawArrow(g, a[0], a[1], b[0], b[1], w);
+    else if (s.type === 'rect') {
+      roundRectPath(g, Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+                    Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), w * 0.9);
+      g.stroke();
+    } else {
+      g.beginPath();
+      g.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2,
+                Math.abs(b[0] - a[0]) / 2, Math.abs(b[1] - a[1]) / 2, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  }
+}
+
+/* One filled path: a shaft that tapers from tail to head, then a broad
+   swept-back head. A uniform line with a small triangle on the end reads as
+   timid at screenshot scale — the head has to carry the arrow. */
+function drawArrow (g, x1, y1, x2, y2, w) {
+  var len = Math.hypot(x2 - x1, y2 - y1);
+  if (len < 0.5) return;
+
+  /* Proportions taken off a reference marker arrow: the head is ~6× the shaft
+     thickness across, so it dominates rather than decorates. */
+  var L  = Math.min(w * 6.4, len * 0.62);       /* head length, never eats the arrow */
+  var hw = Math.max(w * 3.2, L * 0.55);         /* head half-width */
+  var base  = Math.max(0, len - L);             /* where the barbs sit */
+  /* Only a slight sweep. A deep notch turns the barbs into thin spikes and the
+     head loses the visual mass that makes it read at a glance. */
+  var notch = Math.max(0, len - L * 0.86);
+  var tTail = w * 0.26, tBase = w * 0.62;       /* shaft half-thickness, tail → head */
+
+  g.save();
+  g.translate(x1, y1);
+  g.rotate(Math.atan2(y2 - y1, x2 - x1));
+  g.beginPath();
+  g.moveTo(0, -tTail);
+  g.lineTo(notch, -tBase);
+  g.lineTo(base, -hw);
+  g.lineTo(len, 0);
+  g.lineTo(base, hw);
+  g.lineTo(notch, tBase);
+  g.lineTo(0, tTail);
+  g.closePath();
+  g.fill();
+  /* a hair of stroke with round joins takes the razor edges off the corners */
+  g.lineWidth = w * 0.16; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.stroke();
+  g.restore();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4 · LAYOUT + PAINT
+   Composition units == the source image's own pixels. `S` is output pixels
+   per composition unit: 1 or 2 for export, fit×dpr for the preview. Preview
+   and export run the same code, so they cannot drift apart.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* The visible region of the source. While cropping, the full frame is shown so
+   you can see what you are excluding. */
+function content () {
+  if (!source) return null;
+  var c = (!cropping && crop) ? crop : null;
+  return c ? { sx:c.x, sy:c.y, iw:c.w, ih:c.h }
+           : { sx:0, sy:0, iw:source.w, ih:source.h };
+}
+
+function layout () {
+  if (!source) return null;
+  var C = content();
+  var iw = C.iw, ih = C.ih;
+  var pad = (state.padding / 100) * Math.max(iw, ih);
+  var W = iw + pad * 2, H = ih + pad * 2;
+
+  var ratio = null;
+  for (var i = 0; i < RATIOS.length; i++) if (RATIOS[i].id === state.ratio) ratio = RATIOS[i].v;
+  if (ratio) {
+    if (W / H < ratio) W = H * ratio; else H = W / ratio;   /* grow, never crop */
+  }
+
+  return {
+    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C,
+    x:(W - iw) / 2, y:(H - ih) / 2,
+    radius:(state.radius / 100) * 0.06 * Math.min(iw, ih)
+  };
+}
+
+function paint (canvas, S) {
+  var L = layout();
+  if (!L) return null;
+
+  var OW = Math.max(1, Math.round(L.W * S));
+  var OH = Math.max(1, Math.round(L.H * S));
+  canvas.width = OW; canvas.height = OH;
+
+  var g = canvas.getContext('2d');
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.clearRect(0, 0, OW, OH);
+
+  var bg = activeBg();
+  drawBackground(g, OW, OH, bg);
+  if (state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
+
+  var art = getArtwork(L, S);
+  var ax = Math.round(L.x * S), ay = Math.round(L.y * S);
+  drawShadow(g, art, ax, ay, L, S);
+
+  /* Outer half of the edge treatment: a light screenshot on a light background
+     has no boundary otherwise. Drawn under the artwork so only the outside
+     half of the stroke survives. */
+  if (state.edge) {
+    var lw = Math.max(1, 1.1 * S);
+    g.save();
+    g.lineWidth = lw;
+    g.strokeStyle = 'rgba(0,0,0,.10)';
+    roundRectPath(g, ax - lw / 2, ay - lw / 2, art.width + lw, art.height + lw, L.radius * S + lw / 2);
+    g.stroke();
+    g.restore();
+  }
+
+  g.drawImage(art, ax, ay);
+
+  /* Annotations are clipped to the artwork, so a shape dragged past the edge
+     stops at the image rather than bleeding onto the background. */
+  if (shapeList().length) {
+    g.save();
+    roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
+    g.clip();
+    drawShapes(g, L, S, ax, ay);
+    g.restore();
+  }
+
+  return { W:OW, H:OH };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5 · PREVIEW
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var $ = function (id) { return document.getElementById(id); };
+var stage = $('stage'), shot = $('shot'), overlay = $('overlay');
+
+var frameQueued = false;
+function requestRender () {
+  if (frameQueued) return;
+  frameQueued = true;
+  requestAnimationFrame(function () { frameQueued = false; render(); });
+}
+
+function render () {
+  var L = layout();
+  stage.classList.toggle('empty', !L);
+  syncOutputs();
+  /* here rather than only at the mutation sites, so the crop dimensions tick
+     live during a drag and the Undo/Clear buttons can never read stale */
+  syncEditUI();
+  if (!L) return;
+
+  /* Fit the composition into the stage box, never above 1 css px per unit. */
+  var cs = getComputedStyle(stage);
+  var availW = stage.clientWidth  - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  var availH = stage.clientHeight - parseFloat(cs.paddingTop)  - parseFloat(cs.paddingBottom);
+  availW = Math.max(80, availW); availH = Math.max(80, availH);
+
+  var fit = Math.min(availW / L.W, availH / L.H, 1);
+  var dpr = window.devicePixelRatio || 1;
+
+  var S = fit * dpr;
+  paint(shot, S);
+  /* floor, so a rounding overshoot can never hit max-width:100% and squash the aspect */
+  var cssW = Math.floor(L.W * fit), cssH = Math.floor(L.H * fit);
+  shot.style.width  = cssW + 'px';
+  shot.style.height = cssH + 'px';
+  shot.classList.toggle('alpha', activeBg().kind === 'transparent');
+
+  view = { L:L, S:S, fit:fit, dpr:dpr,
+           ax:Math.round(L.x * S), ay:Math.round(L.y * S),
+           aw:Math.round(L.iw * S), ah:Math.round(L.ih * S) };
+
+  overlay.style.width = cssW + 'px';
+  overlay.style.height = cssH + 'px';
+  overlay.width = shot.width; overlay.height = shot.height;
+  paintOverlay();
+  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
+}
+
+/* ── overlay: crop frame + selection chrome (never exported) ───────────── */
+
+function paintOverlay () {
+  if (!view) return;
+  var g = overlay.getContext('2d');
+  g.clearRect(0, 0, overlay.width, overlay.height);
+  var S = view.S, L = view.L;
+
+  if (cropping) {
+    var r = cropRectOnCanvas();
+    g.fillStyle = 'rgba(6,6,8,.58)';
+    g.fillRect(0, 0, overlay.width, overlay.height);
+    g.clearRect(r.x, r.y, r.w, r.h);
+
+    /* Thirds guides and the frame are drawn dark-then-light: a single white
+       line disappears over a white screenshot, which is most of them. */
+    var u = view.dpr;
+    g.beginPath();
+    for (var i = 1; i < 3; i++) {
+      g.moveTo(r.x + r.w * i / 3, r.y);       g.lineTo(r.x + r.w * i / 3, r.y + r.h);
+      g.moveTo(r.x, r.y + r.h * i / 3);       g.lineTo(r.x + r.w, r.y + r.h * i / 3);
+    }
+    g.strokeStyle = 'rgba(0,0,0,.30)'; g.lineWidth = 3 * u; g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1 * u; g.stroke();
+
+    g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 3 * u;
+    g.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+    g.strokeStyle = 'rgba(255,255,255,.95)'; g.lineWidth = 1 * u;
+    g.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+
+    var hs = 9 * view.dpr;
+    g.fillStyle = '#fff'; g.strokeStyle = 'rgba(0,0,0,.55)';
+    var pts = handlePoints(r);
+    for (var k in pts) {
+      g.fillRect(pts[k][0] - hs / 2, pts[k][1] - hs / 2, hs, hs);
+      g.strokeRect(pts[k][0] - hs / 2 + .5, pts[k][1] - hs / 2 + .5, hs - 1, hs - 1);
+    }
+    return;
+  }
+
+  if (selected >= 0 && selected < shapes.length) {
+    var s = shapes[selected];
+    var a = mapPoint(L, S, view.ax, view.ay, s.x1, s.y1);
+    var b = mapPoint(L, S, view.ax, view.ay, s.x2, s.y2);
+    var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
+    var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
+    var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
+    g.strokeStyle = 'rgba(232,160,92,.95)';
+    g.lineWidth = Math.max(1, view.dpr);
+    g.setLineDash([5 * view.dpr, 4 * view.dpr]);
+    g.strokeRect(x, y, w, h);
+    g.setLineDash([]);
+  }
+}
+
+function cropRectOnCanvas () {
+  var r = crop || { x:0, y:0, w:source.w, h:source.h };
+  var S = view.S;
+  return {
+    x:Math.round(view.ax + r.x * S), y:Math.round(view.ay + r.y * S),
+    w:Math.round(r.w * S),           h:Math.round(r.h * S)
+  };
+}
+
+function handlePoints (r) {
+  return {
+    nw:[r.x, r.y],             n:[r.x + r.w / 2, r.y],         ne:[r.x + r.w, r.y],
+    w: [r.x, r.y + r.h / 2],                                   e: [r.x + r.w, r.y + r.h / 2],
+    sw:[r.x, r.y + r.h],       s:[r.x + r.w / 2, r.y + r.h],   se:[r.x + r.w, r.y + r.h]
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5b · EDITING — pointer interaction on the overlay
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var MIN_CROP = 24;
+var drag = null;
+
+function pushHistory () {
+  history.push(JSON.stringify({ crop:crop, shapes:shapes }));
+  if (history.length > 60) history.shift();
+  syncEditUI();
+}
+
+function undo () {
+  if (!history.length) return;
+  var prev = JSON.parse(history.pop());
+  crop = prev.crop; shapes = prev.shapes;
+  selected = -1; draft = null;
+  artCache.key = '';
+  syncEditUI(); requestRender();
+}
+
+function clamp (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* Crop rects are kept on whole source pixels: a fractional source rect makes
+   drawImage resample the region instead of lifting it out 1:1. */
+function setCrop (x, y, w, h) {
+  x = Math.round(clamp(x, 0, source.w));
+  y = Math.round(clamp(y, 0, source.h));
+  crop = {
+    x:x, y:y,
+    w:Math.max(0, Math.round(Math.min(w, source.w - x))),
+    h:Math.max(0, Math.round(Math.min(h, source.h - y)))
+  };
+}
+
+/* client coords → source-image px */
+function toSource (e) {
+  var r = overlay.getBoundingClientRect();
+  var cx = (e.clientX - r.left) / view.fit;      /* → composition units */
+  var cy = (e.clientY - r.top) / view.fit;
+  return { x:cx - view.L.x + view.L.C.sx, y:cy - view.L.y + view.L.C.sy };
+}
+
+/* how many source px a comfortable 10 css px target is worth right now */
+function tolerance () { return 10 / view.fit; }
+
+function hitHandle (e) {
+  var r = cropRectOnCanvas(), pts = handlePoints(r);
+  var b = overlay.getBoundingClientRect();
+  var px = (e.clientX - b.left) * view.dpr, py = (e.clientY - b.top) * view.dpr;
+  var tol = 11 * view.dpr;
+  for (var k in pts) {
+    if (Math.abs(px - pts[k][0]) <= tol && Math.abs(py - pts[k][1]) <= tol) return k;
+  }
+  return null;
+}
+
+function distToSegment (px, py, x1, y1, x2, y2) {
+  var dx = x2 - x1, dy = y2 - y1;
+  var len2 = dx * dx + dy * dy;
+  var t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+/* Shapes are stroked outlines, so "hit" means near the outline — topmost first. */
+function hitShape (p) {
+  var L = view.L;
+  for (var i = shapes.length - 1; i >= 0; i--) {
+    var s = shapes[i];
+    var tol = Math.max(tolerance(), strokeWidth(L, s));
+    if (s.type === 'arrow') {
+      /* the head is ~6× the shaft across, so a shaft-width tolerance would
+         leave the most clickable part of the arrow unclickable */
+      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, strokeWidth(L, s) * 2.5)) return i;
+      continue;
+    }
+    var x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+    var w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
+    if (s.type === 'rect') {
+      var onX = p.x >= x - tol && p.x <= x + w + tol;
+      var onY = p.y >= y - tol && p.y <= y + h + tol;
+      var nearV = Math.abs(p.x - x) <= tol || Math.abs(p.x - (x + w)) <= tol;
+      var nearH = Math.abs(p.y - y) <= tol || Math.abs(p.y - (y + h)) <= tol;
+      if ((onX && nearH) || (onY && nearV)) return i;
+    } else {
+      var rx = w / 2, ry = h / 2;
+      if (rx < 1 || ry < 1) continue;
+      var nx = (p.x - (x + rx)) / rx, ny = (p.y - (y + ry)) / ry;
+      var d = Math.abs(Math.hypot(nx, ny) - 1);
+      if (d <= tol / Math.min(rx, ry) + 0.04) return i;
+    }
+  }
+  return -1;
+}
+
+overlay.addEventListener('pointerdown', function (e) {
+  if (!view || e.button !== 0) return;
+  overlay.setPointerCapture(e.pointerId);
+  var p = toSource(e);
+
+  if (cropping) {
+    pushHistory();                          /* one gesture, one undo step */
+    var h = hitHandle(e);
+    if (h) { drag = { kind:'crop-resize', edge:h, start:p, orig:cropOrFull() }; return; }
+    /* Only an explicit selection can be dragged around. With no crop set there
+       is nothing to move, so a press inside the image starts a fresh one. */
+    var c = crop;
+    if (c && p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
+      drag = { kind:'crop-move', start:p, orig:{ x:c.x, y:c.y, w:c.w, h:c.h } };
+    } else {
+      setCrop(p.x, p.y, 0, 0);
+      drag = { kind:'crop-new', start:{ x:crop.x, y:crop.y } };
+    }
+    requestRender();
+    return;
+  }
+
+  if (tool === 'select') {
+    selected = hitShape(p);
+    paintOverlay();
+    syncEditUI();
+    return;
+  }
+
+  /* drawing: clamp to the visible image so a shape can't be lost off-frame */
+  var C = view.L.C;
+  var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
+  draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
+  drag = { kind:'draw' };
+});
+
+overlay.addEventListener('pointermove', function (e) {
+  if (!drag || !view) return;
+  var p = toSource(e);
+
+  if (drag.kind === 'draw') {
+    var C = view.L.C;
+    draft.x2 = clamp(p.x, C.sx, C.sx + C.iw);
+    draft.y2 = clamp(p.y, C.sy, C.sy + C.ih);
+    if (e.shiftKey && draft.type !== 'arrow') {          /* shift = square / circle */
+      var side = Math.max(Math.abs(draft.x2 - draft.x1), Math.abs(draft.y2 - draft.y1));
+      draft.x2 = draft.x1 + Math.sign(draft.x2 - draft.x1 || 1) * side;
+      draft.y2 = draft.y1 + Math.sign(draft.y2 - draft.y1 || 1) * side;
+    }
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-new') {
+    var x1 = clamp(drag.start.x, 0, source.w), y1 = clamp(drag.start.y, 0, source.h);
+    var x2 = clamp(p.x, 0, source.w), y2 = clamp(p.y, 0, source.h);
+    setCrop(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-move') {
+    var o = drag.orig;
+    setCrop(clamp(o.x + (p.x - drag.start.x), 0, source.w - o.w),
+            clamp(o.y + (p.y - drag.start.y), 0, source.h - o.h), o.w, o.h);
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-resize') {
+    var g = drag.orig, edge = drag.edge;
+    var l = g.x, t = g.y, rr = g.x + g.w, bb = g.y + g.h;
+    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, source.w);
+    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, source.w);
+    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, source.h);
+    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, source.h);
+    /* normalise rather than clamp against the opposite edge, so dragging a
+       handle past its opposite flips the selection the way every crop tool
+       does, instead of collapsing to the minimum size */
+    setCrop(Math.min(l, rr), Math.min(t, bb), Math.abs(rr - l), Math.abs(bb - t));
+    requestRender();
+  }
+});
+
+function endDrag () {
+  if (!drag) return;
+  var kind = drag.kind;
+  drag = null;
+
+  if (kind === 'draw') {
+    var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
+    if (len < tolerance()) { draft = null; requestRender(); return; }   /* a stray click */
+    pushHistory();
+    shapes.push(draft);
+    draft = null;
+    requestRender();
+    return;
+  }
+
+  /* too small to have been meant, or the whole frame — either way, no crop */
+  if (crop && (crop.w < MIN_CROP || crop.h < MIN_CROP)) crop = null;
+  if (crop && crop.x <= 0 && crop.y <= 0 && crop.w >= source.w && crop.h >= source.h) crop = null;
+  artCache.key = '';
+  syncEditUI();
+  requestRender();
+}
+overlay.addEventListener('pointerup', endDrag);
+overlay.addEventListener('pointercancel', endDrag);
+
+function cropOrFull () {
+  return crop || { x:0, y:0, w:source.w, h:source.h };
+}
+
+function setTool (id) {
+  tool = id;                        /* leaving crop mode commits the pending crop */
+  cropping = (id === 'crop');
+  if (cropping && !crop) {
+    /* open with a sensible starting selection rather than nothing (history
+       first — it has to record the state being replaced, not the new one) */
+    pushHistory();
+    setCrop(source.w * .12, source.h * .12, source.w * .76, source.h * .76);
+  }
+  if (id !== 'select') selected = -1;
+  var radio = $('tool-' + id);
+  if (radio) radio.checked = true;
+  syncEditUI();
+  artCache.key = '';
+  requestRender();
+}
+
+function syncEditUI () {
+  $('cropBar').hidden = !cropping;
+  if (cropping) {
+    var c = cropOrFull();
+    $('cropDims').textContent = fmt(c.w) + ' × ' + fmt(c.h);
+  }
+  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (shapes.length || crop) ? 'false' : 'true');
+}
+
+function resetEditing () {
+  tool = 'select'; cropping = false; crop = null;
+  shapes = []; draft = null; selected = -1; history = [];
+  cropCache.key = ''; cropCache.canvas = null;
+  var r = $('tool-select'); if (r) r.checked = true;
+  syncEditUI();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   6 · READOUTS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function fmt (n) { return Math.round(n).toLocaleString('en-US'); }
+
+function syncOutputs () {
+  var L = layout();
+  var padPx = L ? (state.padding / 100) * Math.max(L.iw, L.ih) : null;
+  var readouts = {
+    padding: L ? fmt(padPx) + ' px' : state.padding.toFixed(1) + '%',
+    radius:  L ? fmt(L.radius) + ' px' : Math.round(state.radius) + '%',
+    shadow:  state.shadow === 0 ? 'off' : Math.round(state.shadow) + '%'
+  };
+  for (var key in readouts) {
+    $(key + 'Out').value = readouts[key];
+    /* The visible readout is the meaningful value ("94 px"), not the raw slider
+       number, so mirror it onto the slider. Chrome ignores aria-valuetext on a
+       native range input (Firefox and Safari honour it), which is why each
+       slider is also aria-describedby its own output: the px value stays
+       reachable there. The <output> is aria-live="off" so a drag announces
+       once rather than twice. */
+    $(key).setAttribute('aria-valuetext', readouts[key]);
+  }
+
+  $('weightOut').value = L ? fmt(Math.max(1, (state.weight / 100) * 0.012 * Math.min(L.iw, L.ih))) + ' px'
+                           : Math.round(state.weight) + '%';
+  $('weight').setAttribute('aria-valuetext', $('weightOut').value);
+
+  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (crop && !cropping ? ' cropped' : '') : '—';
+  if (L) {
+    var s = exportScale(L);
+    $('metaOut').textContent = fmt(L.W * s) + '×' + fmt(L.H * s) + (s !== state.scale ? ' ·' + s + '×' : '');
+  } else {
+    $('metaOut').textContent = '—';
+  }
+
+  var has = !!L;
+  ['exportBtn', 'copyBtn', 'clearBtn'].forEach(function (id) {
+    $(id).setAttribute('aria-disabled', has ? 'false' : 'true');
+  });
+}
+
+function fillTrack (el) {
+  var min = parseFloat(el.min), max = parseFloat(el.max);
+  el.style.setProperty('--fill', ((el.value - min) / (max - min) * 100) + '%');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   7 · EXPORT / COPY
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function exportScale (L) {
+  /* Drop to 1× rather than hand back a blank canvas from an over-sized buffer. */
+  var s = state.scale;
+  if (!L) return s;
+  while (s > 1 && (L.W * s > MAX_DIM || L.H * s > MAX_DIM || L.W * s * L.H * s > MAX_AREA)) s--;
+  return s;
+}
+
+function renderExport () {
+  var L = layout();
+  if (!L) throw new Error('No image loaded');
+  var s = exportScale(L);
+  var c = makeCanvas(1, 1);
+  var out = paint(c, s);
+  if (!out || c.width !== out.W || c.height !== out.H) throw new Error('Canvas too large for this browser');
+  return { canvas:c, scale:s, W:out.W, H:out.H };
+}
+
+function toBlob (canvas) {
+  return new Promise(function (resolve, reject) {
+    canvas.toBlob(function (b) { b ? resolve(b) : reject(new Error('PNG encoding failed')); }, 'image/png');
+  });
+}
+
+function stamp () {
+  var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+var lastBlobUrl = null;
+function doExport () {
+  if (!source) return;
+  var r;
+  try { r = renderExport(); }
+  catch (e) { return toast(e.message, 'err'); }
+
+  toBlob(r.canvas).then(function (blob) {
+    if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+    lastBlobUrl = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = lastBlobUrl;
+    a.download = 'screenshot-' + stamp() + '.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    var note = r.scale !== state.scale ? ' (fell back to 1× — 2× exceeds this browser’s canvas limit)' : '';
+    toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG' + note, r.scale !== state.scale ? 'warn' : 'ok');
+    setTimeout(function () { if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; } }, 60000);
+  }).catch(function (e) { toast(e.message || 'Export failed', 'err'); });
+}
+
+function doCopy () {
+  if (!source) return;
+
+  if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') {
+    return copyFailed('This browser can’t write images to the clipboard.');
+  }
+
+  /* Safari drops user activation across an await, so the ClipboardItem must be
+     built synchronously here — from the *promise* of the blob, not the blob. */
+  var blobPromise;
+  try {
+    var r = renderExport();
+    blobPromise = toBlob(r.canvas);
+  } catch (e) {
+    return copyFailed(e.message);
+  }
+  blobPromise.catch(function () {});   /* keep an unhandled rejection out of the console */
+
+  var item;
+  try { item = new ClipboardItem({ 'image/png': blobPromise }); }
+  catch (e) { return copyFailed('Clipboard rejected the image.'); }
+
+  navigator.clipboard.write([item]).then(function () {
+    toast('Copied to clipboard', 'ok');
+  }).catch(function (err) {
+    var why = !window.isSecureContext
+      ? 'The clipboard needs a secure context — this page is on file://.'
+      : (err && err.name === 'NotAllowedError' ? 'The browser blocked the clipboard write.' : (err && err.message) || 'Clipboard write failed.');
+    copyFailed(why);
+  });
+}
+
+function copyFailed (why) {
+  toast('Copy failed. ' + why, 'err', { label:'Download instead', fn:doExport });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 · IMAGE INPUT
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function acceptFile (file) {
+  if (!file) return;
+  if (file.type && file.type.indexOf('image/') !== 0) return toast('That’s not an image file.', 'err');
+  loadImage(file, file.name || 'pasted image');
+}
+
+function loadImage (blob, name) {
+  var done = function (img, w, h) {
+    if (source && source.img && typeof source.img.close === 'function') source.img.close();
+    source = { img:img, w:w, h:h, name:name };
+    sourceRev++;
+    artCache.key = '';
+    resetEditing();     /* a crop or an arrow means nothing against a different image */
+    $('fileChip').hidden = false;
+    $('fileName').textContent = name;
+    render();
+    toast(fmt(w) + '×' + fmt(h) + ' loaded', 'ok');
+  };
+  var fail = function () { toast('Couldn’t decode that image.', 'err'); };
+
+  if (window.createImageBitmap) {
+    createImageBitmap(blob).then(function (bmp) { done(bmp, bmp.width, bmp.height); }).catch(function () { viaElement(); });
+  } else viaElement();
+
+  function viaElement () {
+    var url = URL.createObjectURL(blob), img = new Image();
+    img.onload = function () { URL.revokeObjectURL(url); done(img, img.naturalWidth, img.naturalHeight); };
+    img.onerror = function () { URL.revokeObjectURL(url); fail(); };
+    img.src = url;
+  }
+}
+
+function clearImage () {
+  if (source && source.img && typeof source.img.close === 'function') source.img.close();
+  source = null; sourceRev++; artCache.key = ''; artCache.canvas = null;
+  resetEditing();
+  $('fileChip').hidden = true;
+  render();
+}
+
+/* ── generated sample, so the page can demonstrate itself ──────────────── */
+
+function loadSample () {
+  var W = 1440, H = 900, c = makeCanvas(W, H), g = c.getContext('2d');
+  var UI = '-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif';
+
+  g.fillStyle = '#FCFAF7'; g.fillRect(0, 0, W, H);
+
+  /* sidebar */
+  g.fillStyle = '#F3EFE8'; g.fillRect(0, 0, 276, H);
+  g.fillStyle = 'rgba(0,0,0,.07)'; g.fillRect(276, 0, 1, H);
+
+  /* traffic lights */
+  var lights = ['#FF5F57', '#FEBC2E', '#28C840'];
+  for (var i = 0; i < 3; i++) {
+    g.beginPath(); g.arc(30 + i * 20, 30, 6, 0, Math.PI * 2);
+    g.fillStyle = lights[i]; g.fill();
+  }
+
+  /* sidebar items */
+  g.font = '600 11px ' + UI; g.fillStyle = '#A29A8C';
+  g.fillText('WORKSPACE', 28, 84);
+  var items = ['Inbox', 'Today', 'Drafts', 'Archive'];
+  for (var j = 0; j < items.length; j++) {
+    var y = 104 + j * 38;
+    if (j === 1) {
+      g.fillStyle = '#E6DFD3';
+      roundRectPath(g, 20, y, 236, 32, 8); g.fill();
+    }
+    g.fillStyle = j === 1 ? '#2C2721' : '#6E675C';
+    g.beginPath(); g.arc(38, y + 16, 4.5, 0, Math.PI * 2); g.fill();
+    g.font = (j === 1 ? '600 ' : '400 ') + '13.5px ' + UI;
+    g.fillText(items[j], 54, y + 21);
+  }
+
+  /* main column */
+  g.fillStyle = '#9C9486'; g.font = '600 11px ' + UI;
+  g.fillText('DRAFT · 4 MIN READ', 332, 96);
+
+  g.fillStyle = '#1D1A16'; g.font = '600 34px ' + UI;
+  g.fillText('A screenshot is a first impression.', 332, 146);
+
+  g.fillStyle = '#6E675C'; g.font = '400 15px ' + UI;
+  g.fillText('Padding, a soft shadow, and somewhere for the eye to rest.', 332, 180);
+
+  /* paragraph rules */
+  g.fillStyle = '#E7E2D8';
+  var widths = [1020, 986, 1032, 900, 1010, 640];
+  for (var p = 0; p < widths.length; p++) { roundRectPath(g, 332, 226 + p * 26, widths[p], 9, 4.5); g.fill(); }
+
+  /* accent card */
+  g.fillStyle = '#FDF3E7';
+  roundRectPath(g, 332, 420, 1032, 132, 14); g.fill();
+  g.fillStyle = '#E8A05C'; roundRectPath(g, 332, 420, 5, 132, 2.5); g.fill();
+  g.fillStyle = '#8A5B2A'; g.font = '600 14px ' + UI;
+  g.fillText('Everything renders locally', 366, 462);
+  g.fillStyle = '#A08157'; g.font = '400 13.5px ' + UI;
+  g.fillText('No uploads, no server round-trip, no account.', 366, 490);
+
+  g.fillStyle = '#E7E2D8';
+  var w2 = [1032, 940, 998, 780];
+  for (var q = 0; q < w2.length; q++) { roundRectPath(g, 332, 596 + q * 26, w2[q], 9, 4.5); g.fill(); }
+
+  c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png') : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
+  function useCanvasDirect () {
+    if (source && source.img && typeof source.img.close === 'function') source.img.close();
+    source = { img:c, w:W, h:H, name:'sample.png' };
+    sourceRev++; artCache.key = ''; resetEditing();
+    $('fileChip').hidden = false; $('fileName').textContent = 'sample.png';
+    render();
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   9 · UI CONSTRUCTION
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* segmented controls */
+function buildSeg (host, name, items, current, onPick) {
+  host.innerHTML = '';
+  items.forEach(function (it) {
+    var id = name + '-' + it.id;
+    var input = document.createElement('input');
+    input.type = 'radio'; input.name = name; input.id = id; input.value = it.id;
+    input.checked = String(it.id) === String(current);
+    var label = document.createElement('label');
+    label.setAttribute('for', id); label.textContent = it.label;
+    if (it.hint) { label.title = it.hint; input.setAttribute('aria-label', it.hint); }
+    input.addEventListener('change', function () { if (input.checked) onPick(it.id); });
+    host.appendChild(input); host.appendChild(label);
+  });
+}
+
+/* tool palette */
+(function buildTools () {
+  var host = $('toolSeg');
+  TOOLS.forEach(function (t) {
+    var input = document.createElement('input');
+    input.type = 'radio'; input.name = 'tool'; input.id = 'tool-' + t.id; input.value = t.id;
+    input.checked = tool === t.id;
+    input.setAttribute('aria-label', t.label + ' tool (' + t.key.toUpperCase() + ')');
+    var label = document.createElement('label');
+    label.setAttribute('for', 'tool-' + t.id);
+    label.title = t.label + '  ·  ' + t.key.toUpperCase();
+    label.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true">' + t.svg + '</svg><span>' + t.label + '</span>';
+    input.addEventListener('change', function () { if (input.checked) setTool(t.id); });
+    host.appendChild(input); host.appendChild(label);
+  });
+})();
+
+/* annotation colours */
+(function buildColors () {
+  var host = $('colorRow');
+  COLORS.forEach(function (hex) {
+    var label = document.createElement('label');
+    var input = document.createElement('input');
+    input.type = 'radio'; input.name = 'annocolor'; input.value = hex;
+    input.checked = state.color.toLowerCase() === hex.toLowerCase();
+    input.setAttribute('aria-label', 'Annotation colour ' + hex);
+    var dot = document.createElement('span');
+    dot.className = 'dot'; dot.style.background = hex;
+    input.addEventListener('change', function () {
+      if (!input.checked) return;
+      state.color = hex;
+      /* retint the selected shape, so the swatch acts on what you have chosen */
+      if (selected >= 0 && shapes[selected]) { pushHistory(); shapes[selected].color = hex; }
+      save(); requestRender();
+    });
+    label.appendChild(input); label.appendChild(dot);
+    host.appendChild(label);
+  });
+})();
+
+$('weight').value = state.weight;
+fillTrack($('weight'));
+$('weight').addEventListener('input', function () {
+  state.weight = parseFloat($('weight').value);
+  fillTrack($('weight'));
+  if (selected >= 0 && shapes[selected]) shapes[selected].weight = state.weight;
+  save(); requestRender();
+});
+
+$('undoBtn').addEventListener('click', undo);
+$('clearShapes').addEventListener('click', function () {
+  if (!shapes.length && !crop) return;
+  pushHistory();
+  shapes = []; crop = null; selected = -1; cropping = false;
+  artCache.key = '';
+  setTool('select');
+  toast('Annotations and crop cleared', 'ok');
+});
+$('cropDone').addEventListener('click', function () { setTool('select'); });
+$('cropReset').addEventListener('click', function () {
+  pushHistory(); crop = null; artCache.key = ''; syncEditUI(); requestRender();
+});
+
+buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
+  state.ratio = id; save(); requestRender();
+});
+
+buildSeg($('scaleSeg'), 'scale', [{ id:'1', label:'1× — actual size' }, { id:'2', label:'2× — retina' }], String(state.scale), function (id) {
+  state.scale = parseInt(id, 10); save(); syncOutputs();
+});
+
+/* swatches — each one is a real render of the preset, so a swatch can never
+   drift from what the canvas actually paints. */
+var swHost = $('swatches');
+BACKGROUNDS.forEach(function (bg) {
+  var label = document.createElement('label');
+  label.className = 'swatch'; label.title = bg.name;
+
+  var input = document.createElement('input');
+  input.type = 'radio'; input.name = 'bg'; input.value = bg.id;
+  input.checked = state.bg === bg.id;
+  input.setAttribute('aria-label', bg.name);
+
+  var span = document.createElement('span');
+  span.className = 'sw';
+  var cv = document.createElement('canvas');
+  span.appendChild(cv);
+
+  label.appendChild(input); label.appendChild(span);
+  swHost.appendChild(label);
+
+  paintSwatch(cv, bg);
+  bg._sw = cv;
+
+  input.addEventListener('change', function () {
+    if (!input.checked) return;
+    state.bg = bg.id; save(); requestRender();
+  });
+});
+
+function paintSwatch (cv, bg) {
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  var n = Math.round(44 * dpr);
+  cv.width = n; cv.height = n;
+  var g = cv.getContext('2d');
+  g.clearRect(0, 0, n, n);
+
+  if (bg.kind === 'transparent') {
+    var sq = n / 4;
+    g.fillStyle = '#2A2A2E'; g.fillRect(0, 0, n, n);
+    g.fillStyle = '#3A3A40';
+    for (var y = 0; y < 4; y++) for (var x = 0; x < 4; x++) if ((x + y) % 2) g.fillRect(x * sq, y * sq, sq, sq);
+    return;
+  }
+  drawBackground(g, n, n, bg.kind === 'custom' ? { kind:'solid', color:state.custom } : bg);
+  if (bg.kind === 'custom') {
+    g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = Math.max(1, dpr);
+    g.beginPath();
+    g.moveTo(n * .32, n * .5); g.lineTo(n * .68, n * .5);
+    g.moveTo(n * .5, n * .32); g.lineTo(n * .5, n * .68);
+    g.stroke();
+  }
+}
+
+/* sliders */
+[['padding', 'padding'], ['radius', 'radius'], ['shadow', 'shadow']].forEach(function (pair) {
+  var el = $(pair[0]), key = pair[1];
+  el.value = state[key];
+  fillTrack(el);
+  el.addEventListener('input', function () {
+    state[key] = parseFloat(el.value);
+    fillTrack(el);
+    save(); requestRender();
+  });
+});
+
+/* switches */
+[['edge', 'edge'], ['grain', 'grain']].forEach(function (pair) {
+  var el = $(pair[0]), key = pair[1];
+  el.checked = !!state[key];
+  el.addEventListener('change', function () {
+    state[key] = el.checked;
+    if (key === 'edge') artCache.key = '';
+    save(); requestRender();
+  });
+});
+
+/* custom colour */
+var colorEl = $('customColor'), hexEl = $('customHex');
+colorEl.value = state.custom;
+hexEl.value = state.custom.toUpperCase();
+
+function setCustom (hex, fromHexField) {
+  state.custom = hex;
+  colorEl.value = hex;
+  if (!fromHexField) hexEl.value = hex.toUpperCase();
+  var custom = bgById('custom');
+  if (custom && custom._sw) paintSwatch(custom._sw, custom);
+  if (state.bg !== 'custom') {
+    state.bg = 'custom';
+    var radio = swHost.querySelector('input[value="custom"]');
+    if (radio) radio.checked = true;
+  }
+  save(); requestRender();
+}
+
+colorEl.addEventListener('input', function () { setCustom(colorEl.value, false); });
+hexEl.addEventListener('input', function () {
+  var v = hexEl.value.trim();
+  if (v[0] !== '#') v = '#' + v;
+  if (/^#[0-9a-f]{6}$/i.test(v)) setCustom(v.toLowerCase(), true);
+});
+hexEl.addEventListener('blur', function () { hexEl.value = state.custom.toUpperCase(); });
+
+/* buttons */
+$('pickBtn').addEventListener('click', function () { $('filePicker').click(); });
+$('pickBtn2').addEventListener('click', function () { $('filePicker').click(); });
+$('sampleBtn').addEventListener('click', loadSample);
+$('sampleBtn2').addEventListener('click', loadSample);
+$('clearBtn').addEventListener('click', clearImage);
+$('exportBtn').addEventListener('click', doExport);
+$('copyBtn').addEventListener('click', doCopy);
+
+$('resetBtn').addEventListener('click', function () {
+  for (var k in DEFAULTS) state[k] = DEFAULTS[k];
+  syncControls();
+  save(); requestRender();
+  toast('Controls reset', 'ok');
+});
+
+function syncControls () {
+  ['padding', 'radius', 'shadow', 'weight'].forEach(function (k) { $(k).value = state[k]; fillTrack($(k)); });
+  var cr = $('colorRow').querySelector('input[value="' + state.color + '"]');
+  if (cr) cr.checked = true;
+  $('edge').checked = state.edge;
+  $('grain').checked = state.grain;
+  colorEl.value = state.custom;
+  hexEl.value = state.custom.toUpperCase();
+  var bgRadio = swHost.querySelector('input[value="' + state.bg + '"]');
+  if (bgRadio) bgRadio.checked = true;
+  var rr = document.getElementById('ratio-' + state.ratio); if (rr) rr.checked = true;
+  var sr = document.getElementById('scale-' + state.scale); if (sr) sr.checked = true;
+  var custom = bgById('custom'); if (custom && custom._sw) paintSwatch(custom._sw, custom);
+  artCache.key = '';
+}
+
+$('filePicker').addEventListener('change', function (e) {
+  acceptFile(e.target.files && e.target.files[0]);
+  e.target.value = '';
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   10 · DROP / PASTE / KEYS
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var veil = $('veil'), dragDepth = 0;
+
+window.addEventListener('dragenter', function (e) {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth++; veil.classList.add('on');
+});
+window.addEventListener('dragover', function (e) {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', function (e) {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) veil.classList.remove('on');
+});
+window.addEventListener('drop', function (e) {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; veil.classList.remove('on');
+  var dt = e.dataTransfer;
+  if (!dt) return;
+  var file = null;
+  if (dt.items) {
+    for (var i = 0; i < dt.items.length; i++) {
+      if (dt.items[i].kind === 'file') { file = dt.items[i].getAsFile(); break; }
+    }
+  }
+  if (!file && dt.files && dt.files.length) file = dt.files[0];
+  acceptFile(file);
+});
+
+function hasFiles (e) {
+  var dt = e.dataTransfer;
+  if (!dt) return false;
+  if (dt.types) for (var i = 0; i < dt.types.length; i++) if (dt.types[i] === 'Files') return true;
+  return false;
+}
+
+window.addEventListener('paste', function (e) {
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file' && items[i].type.indexOf('image/') === 0) {
+      e.preventDefault();
+      loadImage(items[i].getAsFile(), 'pasted-' + stamp() + '.png');
+      return;
+    }
+  }
+});
+
+function isTyping (el) {
+  if (!el) return false;
+  var t = (el.tagName || '').toLowerCase();
+  return t === 'input' && ['text', 'search', 'url', 'email', 'number'].indexOf(el.type) >= 0 || t === 'textarea' || el.isContentEditable;
+}
+
+window.addEventListener('keydown', function (e) {
+  var k = (e.key || '').toLowerCase();
+
+  /* unmodified keys: tool switching and editing */
+  if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (isTyping(document.activeElement)) return;
+
+    if (k === 'escape') {
+      if (cropping) { setTool('select'); return; }
+      if (selected >= 0) { selected = -1; paintOverlay(); return; }
+      hideToast(); return;
+    }
+    if ((k === 'delete' || k === 'backspace') && selected >= 0 && shapes[selected]) {
+      e.preventDefault();
+      pushHistory();
+      shapes.splice(selected, 1); selected = -1;
+      requestRender();
+      return;
+    }
+    if (k === 'enter' && cropping) { e.preventDefault(); setTool('select'); return; }
+    if (source) {
+      for (var i = 0; i < TOOLS.length; i++) {
+        if (TOOLS[i].key === k) { e.preventDefault(); setTool(TOOLS[i].id); return; }
+      }
+    }
+    return;
+  }
+
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+  if (k === 's') { e.preventDefault(); doExport(); return; }
+  if (k === 'o') { e.preventDefault(); $('filePicker').click(); return; }
+  if (k === 'c') {
+    if (isTyping(document.activeElement)) return;
+    var sel = window.getSelection();
+    if (sel && String(sel).length) return;      /* let a real text copy through */
+    if (!source) return;
+    e.preventDefault(); doCopy();
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   11 · TOAST
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var toastEl = $('toast'), toastMsg = $('toastMsg'), toastAct = $('toastAct'), toastTimer = 0;
+
+function toast (msg, kind, action) {
+  clearTimeout(toastTimer);
+  toastMsg.textContent = msg;
+  toastEl.className = 'toast on' + (kind === 'err' ? ' err' : kind === 'warn' ? ' warn' : '');
+
+  if (action) {
+    toastAct.hidden = false;
+    toastAct.textContent = action.label;
+    toastAct.onclick = function () { hideToast(); action.fn(); };
+  } else {
+    toastAct.hidden = true; toastAct.onclick = null;
+  }
+
+  toastTimer = setTimeout(hideToast, action ? 12000 : kind === 'err' ? 6000 : 2600);
+}
+function hideToast () { toastEl.classList.remove('on'); }   /* Escape is routed in §10 */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   12 · BOOT
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var resizeTimer = 0;
+window.addEventListener('resize', function () {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(requestRender, 60);
+});
+if (window.ResizeObserver) new ResizeObserver(requestRender).observe(stage);
+
+/* devicePixelRatio can change when a window moves between displays */
+(function watchDpr () {
+  var mq = window.matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
+  var on = function () { requestRender(); watchDpr(); };
+  if (mq.addEventListener) mq.addEventListener('change', on, { once:true });
+  else if (mq.addListener) mq.addListener(on);
+})();
+
+syncControls();
+syncEditUI();
+render();
+
+})();
+</script>
+</body>
+</html>
