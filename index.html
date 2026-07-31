@@ -598,7 +598,7 @@ const DEFAULTS = {
   ratio: "auto",
   scale: 1,       // export multiplier
   annoColor: "#FF3B30",
-  annoWidth: 4    // stroke width in source pixels
+  annoWidth: 1.4  // stroke weight as a % of sqrt(image area) — see STROKE_STEPS
 };
 
 /* Image-scoped document state. Deliberately NOT part of `state`: crop and
@@ -607,7 +607,12 @@ const DEFAULTS = {
    localStorage by accident. */
 const doc = { crop: null, annotations: [], selected: null };
 
-const STROKE_WIDTHS = [2, 4, 7, 12];
+/* Stroke weight is a PERCENTAGE of sqrt(image area), not an absolute pixel
+   count, for exactly the reason padding is (§2): 7px of stroke is bold on a
+   600px screenshot and invisible on a 2880px retina capture. Resolved to
+   pixels once, when a mark is created, so everything downstream keeps working
+   in plain source pixels. */
+const STROKE_STEPS = [0.4, 0.8, 1.4, 2.4];
 
 const RATIOS = [
   { id: "auto",    label: "Auto",    r: null },
@@ -734,7 +739,7 @@ function loadSettings() {
   if (RATIOS.some(r => r.id === saved.ratio)) state.ratio = saved.ratio;
   if (saved.scale === 1 || saved.scale === 2) state.scale = saved.scale;
   if (normHex(saved.annoColor)) state.annoColor = normHex(saved.annoColor);
-  if (STROKE_WIDTHS.indexOf(saved.annoWidth) >= 0) state.annoWidth = saved.annoWidth;
+  if (STROKE_STEPS.indexOf(saved.annoWidth) >= 0) state.annoWidth = saved.annoWidth;
 }
 
 let saveTimer = 0;
@@ -1058,14 +1063,28 @@ function getShadowSprite(card, layers, scale) {
 
 const ANNO_FONT = '-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif';
 
-function textFontSize(a) { return a.size || Math.max(14, a.width * 5); }
+/** Current stroke weight in source pixels, from the selected percentage step
+ *  and the size of the image being marked up. */
+function resolveStroke() {
+  return Math.max(2, Math.round((state.annoWidth / 100) * layout().unit));
+}
+
+/* Type and badge sizes derive from the stroke weight, recalibrated when stroke
+   became proportional: the old ×5 / ×3.4 factors were tuned against absolute
+   2–12px widths and produce absurd sizes now that a bold stroke is ~16px. */
+const defaultTextSize = w => Math.max(14, Math.round(w * 3.4));
+function textFontSize(a) { return a.size || defaultTextSize(a.width); }
 function annoFont(a) { return "600 " + textFontSize(a) + "px " + ANNO_FONT; }
 
 /** Bounding box of an annotation, in source pixels. */
 function annoBounds(a) {
   if (a.type === "arrow") {
-    return { x: Math.min(a.x1, a.x2), y: Math.min(a.y1, a.y2),
-             w: Math.abs(a.x2 - a.x1), h: Math.abs(a.y2 - a.y1) };
+    // Inflate by the head half-width so the selection box encloses the head
+    // rather than clipping through it — using the same clamped value the
+    // renderer uses, so a very short arrow doesn't claim a huge box.
+    const p = arrowMetrics(a).hw;
+    return { x: Math.min(a.x1, a.x2) - p, y: Math.min(a.y1, a.y2) - p,
+             w: Math.abs(a.x2 - a.x1) + p * 2, h: Math.abs(a.y2 - a.y1) + p * 2 };
   }
   if (a.type === "text") {
     const m = measureAnnoText(a);
@@ -1079,7 +1098,7 @@ function annoBounds(a) {
            w: Math.abs(a.w), h: Math.abs(a.h) };
 }
 
-function stepRadius(a) { return Math.max(12, a.width * 3.4); }
+function stepRadius(a) { return Math.max(12, a.width * 2.5); }
 
 let measureCanvas = null;
 function measureAnnoText(a) {
@@ -1093,28 +1112,50 @@ function measureAnnoText(a) {
   return { w: w + 4, h: lines.length * size * 1.2, lines: lines, size: size };
 }
 
-function drawArrow(g, a) {
+/** Drawn as a single filled polygon rather than a stroked line plus a
+ *  triangle: the shaft tapers from tail to head, which reads as direction
+ *  even before the eye registers the head, and the head is deliberately
+ *  oversized — a proportionally small head is the first thing to vanish when
+ *  a screenshot gets scaled down in a chat or a ticket. */
+const ARROW_HEAD_LEN = 5.4;   // × stroke
+const ARROW_HEAD_HALF = 2.4;  // × stroke (so the head spans 4.8× the shaft)
+const ARROW_TAIL_HALF = 0.30; // × stroke
+const ARROW_NECK_HALF = 0.52; // × stroke
+
+/** Clamped against the arrow's own length, so a short drag still looks like an
+ *  arrow instead of an arrowhead with a stub behind it. Shared with
+ *  annoBounds so selection matches what is drawn. */
+function arrowMetrics(a) {
   const dx = a.x2 - a.x1, dy = a.y2 - a.y1;
   const len = Math.hypot(dx, dy);
-  if (len < 0.5) return;
-  const ux = dx / len, uy = dy / len;
-  const head = Math.min(len, a.width * 4.6);
-  const halfW = a.width * 2.1;
-  // Stop the shaft short of the head so the tip stays sharp instead of the
-  // round line cap poking through it.
-  const sx = a.x2 - ux * head * 0.92, sy = a.y2 - uy * head * 0.92;
+  return {
+    len: len,
+    head: Math.min(len * 0.62, a.width * ARROW_HEAD_LEN),
+    hw: Math.min(a.width * ARROW_HEAD_HALF, len * 0.42)
+  };
+}
 
-  g.beginPath();
-  g.moveTo(a.x1, a.y1);
-  g.lineTo(sx, sy);
-  g.lineWidth = a.width;
-  g.stroke();
+function drawArrow(g, a) {
+  const m = arrowMetrics(a);
+  const len = m.len;
+  if (len < 0.5) return;
+  const ux = (a.x2 - a.x1) / len, uy = (a.y2 - a.y1) / len;
+  const nx = -uy, ny = ux;                       // unit normal
+
+  const head = m.head, hw = m.hw;
+  const t0 = a.width * ARROW_TAIL_HALF;
+  const t1 = a.width * ARROW_NECK_HALF;
 
   const bx = a.x2 - ux * head, by = a.y2 - uy * head;
+
   g.beginPath();
-  g.moveTo(a.x2, a.y2);
-  g.lineTo(bx - uy * halfW, by + ux * halfW);
-  g.lineTo(bx + uy * halfW, by - ux * halfW);
+  g.moveTo(a.x1 + nx * t0, a.y1 + ny * t0);
+  g.lineTo(bx + nx * t1,   by + ny * t1);
+  g.lineTo(bx + nx * hw,   by + ny * hw);
+  g.lineTo(a.x2, a.y2);
+  g.lineTo(bx - nx * hw,   by - ny * hw);
+  g.lineTo(bx - nx * t1,   by - ny * t1);
+  g.lineTo(a.x1 - nx * t0, a.y1 - ny * t0);
   g.closePath();
   g.fill();
 }
@@ -1555,7 +1596,7 @@ overlay.addEventListener("pointerdown", ev => {
   // drawing tools: create the shape now and mutate it live, so the preview is
   // the real renderer rather than a separate "in progress" code path.
   pushHistory();
-  const base = { id: ++annoSeq, color: state.annoColor, width: state.annoWidth };
+  const base = { id: ++annoSeq, color: state.annoColor, width: resolveStroke() };
   let a;
   if (tool === "arrow") a = Object.assign(base, { type: "arrow", x1: p.x, y1: p.y, x2: p.x, y2: p.y });
   else a = Object.assign(base, { type: tool, x: p.x, y: p.y, w: 0, h: 0 });
@@ -1750,10 +1791,11 @@ let editing = null;
 
 function placeText(p) {
   pushHistory();
+  const w = resolveStroke();
   const a = {
     id: ++annoSeq, type: "text", x: p.x, y: p.y,
-    text: "", color: state.annoColor, width: state.annoWidth,
-    size: Math.max(14, state.annoWidth * 5)
+    text: "", color: state.annoColor, width: w,
+    size: defaultTextSize(w)
   };
   doc.annotations.push(a);
   doc.selected = a.id;
@@ -1812,7 +1854,7 @@ function placeStep(p) {
   const n = doc.annotations.filter(a => a.type === "step").length + 1;
   doc.annotations.push({
     id: ++annoSeq, type: "step", x: p.x, y: p.y, n: n,
-    color: state.annoColor, width: state.annoWidth
+    color: state.annoColor, width: resolveStroke()
   });
   invalidate();
 }
@@ -1898,17 +1940,22 @@ function buildToolbar() {
 
   const widths = document.createElement("div");
   widths.className = "tool-width";
-  STROKE_WIDTHS.forEach(w => {
+  const WIDTH_NAMES = ["Fine", "Regular", "Bold", "Heavy"];
+  STROKE_STEPS.forEach((pct, i) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.dataset.width = String(w);
-    b.title = "Stroke " + w;
-    b.setAttribute("aria-label", "Stroke width " + w);
-    b.innerHTML = '<i style="height:' + Math.max(2, Math.round(w * .9)) + 'px"></i>';
+    b.dataset.width = String(pct);
+    b.title = WIDTH_NAMES[i] + " stroke";
+    b.setAttribute("aria-label", WIDTH_NAMES[i] + " stroke");
+    b.innerHTML = '<i style="height:' + Math.max(2, Math.round(pct * 3.4)) + 'px"></i>';
     b.addEventListener("click", () => {
-      state.annoWidth = w;
+      state.annoWidth = pct;
       const sel = selectedAnno();
-      if (sel) { sel.width = w; if (sel.type === "text") sel.size = Math.max(14, w * 5); invalidate(); }
+      if (sel) {
+        sel.width = resolveStroke();
+        if (sel.type === "text") sel.size = defaultTextSize(sel.width);
+        invalidate();
+      }
       saveSettings();
       syncToolbar();
     });
@@ -1938,7 +1985,7 @@ function syncToolbar() {
   toolbar.querySelectorAll("[data-tool]").forEach(b =>
     b.setAttribute("aria-pressed", String(b.dataset.tool === tool)));
   toolbar.querySelectorAll("[data-width]").forEach(b =>
-    b.setAttribute("aria-pressed", String(parseInt(b.dataset.width, 10) === state.annoWidth)));
+    b.setAttribute("aria-pressed", String(parseFloat(b.dataset.width) === state.annoWidth)));
   const ci = toolbar.querySelector(".tool-color input");
   if (ci && document.activeElement !== ci) ci.value = state.annoColor.toLowerCase();
   toolbar.style.setProperty("--anno-color", state.annoColor);

@@ -224,6 +224,28 @@ blocks get bigger. Redaction therefore preserves parity by construction, like th
 It is applied after the card and before the annotation layer, by sampling the already-composited
 canvas down to a `cols × rows` scratch and drawing it back with smoothing off.
 
+### Stroke weight is proportional, for the same reason padding is
+
+The first version used absolute stroke widths (2/4/7/12 px). On a 1376px screenshot a 7px arrow
+is 0.5% of the image; the marker-pen arrows people expect are nearer 3%. The same preset that
+looks bold on a 640px capture is a hairline on a 5120px one — the identical mistake §2 avoids
+for padding.
+
+So `state.annoWidth` holds a **percentage of `sqrt(image area)`** (0.4 / 0.8 / 1.4 / 2.4), and is
+resolved to pixels once, at the moment a mark is created. Everything downstream keeps working in
+plain source pixels, so no drawing, hit-testing or bounds code had to change. Measured across
+640×400 → 5120×2880, "Bold" now lands at 1.02–1.11% of image width every time.
+
+Type and badge sizes derive from the stroke, and had to be recalibrated — the old ×5 and ×3.4
+factors were tuned against 2–12px strokes and produced absurd results once a bold stroke became
+~16px.
+
+The arrow is a single filled polygon rather than a stroked line plus a triangle: the shaft tapers
+from tail to neck, which reads as direction before the eye even registers the head, and the head
+spans 4.8× the shaft. Head length and width are clamped against the arrow's own length so a short
+drag still looks like an arrow, and `annoBounds` uses the same clamped geometry so the selection
+box matches what is actually drawn.
+
 ### What is and isn't persisted
 
 Tool colour and stroke width persist. Crop and annotations do **not** — they belong to an image,
@@ -297,3 +319,11 @@ scale-invariant, so it is turned off to compare renders. Run against the real pa
     shadow still runs at the 120fps display cap, worst frame ≈ 11ms.
 18. **Overlays cannot leak.** Crop handles, thirds guides and selection chrome are drawn on a
     separate canvas; the export path never calls `drawOverlay()`.
+19. **Proportional stroke holds across sources.** "Bold" measures 1.02–1.11% of image width on
+    640×400, 1376×756, 1440×900, 2880×1800 and 5120×2880 — the absolute-pixel version ranged
+    from 1.09% down to 0.24% over the same span.
+20. **The rebuilt arrow is perfectly scale-invariant.** Adding it moves the mean from 0.208 to
+    0.218 and leaves the max at 45.5 — *identical* to the no-annotation baseline. Drawing it as
+    one filled polygon removed the stroke/fill seam the previous two-part arrow had.
+21. **Arrow geometry degrades gracefully.** At lengths 6, 30, 200 and 600 px the head stays
+    inside the arrow and the selection box tracks the drawn size (6px → 11×5, not 73×67).

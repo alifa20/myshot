@@ -47,6 +47,12 @@ The tool strip sits under the canvas. Pick a tool, then drag once.
 
 <kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo.
 
+**Stroke weight is proportional to the image**, not an absolute pixel count — the four steps run
+Fine, Regular, Bold and Heavy. A fixed 7px stroke is bold on a 640px screenshot and a hairline on
+a 2880px retina capture; as a percentage of the image, Bold stays ~1% of the width whatever you
+drop in. Arrows use an oversized head on a tapered shaft, because a proportionally small head is
+the first thing to disappear once a screenshot is scaled down in a chat or a ticket.
+
 **Cropping is non-destructive.** The full bitmap is kept, so you can re-crop or reset at any
 time, and annotations stay pinned to the image features they point at rather than drifting.
 
