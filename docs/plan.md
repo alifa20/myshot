@@ -205,3 +205,22 @@ the export matches the cropped readout exactly.
 7. The app's own shadow-probe canvas triggered Chrome's `getImageData` readback warning on every
    load; it now passes `willReadFrequently`. This was the one console message in the whole app, and
    it is worth recording that it came from the app rather than the test harness.
+
+### 6a. Arrow geometry, reworked against a reference
+
+The first arrow was a stroked line plus a small triangle, which reads as timid at screenshot scale.
+Rebuilt as one filled path: a shaft tapering from `0.26w` to `0.62w` half-thickness, then a head
+`6.4w` long and `~7w` across. Judged by cropping the rendered PNG to 1:1 and comparing against the
+reference, over three iterations:
+
+1. Bigger head, tapered shaft — better, still timid.
+2. Wider head — barely moved the needle. The zoom I was reading turned out to be the *lowest* weight
+   arrow, not the default; the crop offset was wrong. Worth noting as a measurement error, not a
+   design one.
+3. The actual culprit was the **notch depth**: sweeping the back edge `0.34L` deep turned the barbs
+   into thin spikes with no visual mass. At `0.14L` the head reads as a solid broad triangle, which
+   is what the reference actually is.
+
+Weight scale also went from `0.012` to `0.016` of the shortest edge, default `34 → 46`, since the old
+default was too fine to see. Arrow hit-testing now uses `2.5×` the stroke width, because a
+shaft-width tolerance left the widest, most clickable part of the arrow unclickable.

@@ -38,6 +38,9 @@ Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow 
   a stored rectangle, so you can reopen and readjust it, and nothing is ever thrown away.
 - **Arrow / box / ellipse** drag out from the point you press. Six colours, one weight slider that
   scales with the image, and `shift` constrains a box to a square or an ellipse to a circle.
+  The arrow is a single filled path — a shaft that tapers from tail to head, then a broad head about
+  6× the shaft across with a slight sweep. A uniform line with a small triangle on the end reads as
+  timid at screenshot scale; the head has to carry the arrow.
 - **Select** then click a shape to select it, `⌫` to delete. `⌘Z` undoes any edit, **Clear all**
   removes everything. Changing the colour or weight while a shape is selected retints that shape.
 

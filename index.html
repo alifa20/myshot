@@ -670,7 +670,7 @@ var DEFAULTS = {
   edge:    true,
   scale:   2,
   color:   '#FF453A',   /* annotation colour */
-  weight:  34           /* 10-100 → % of the shortest edge, ×0.012 */
+  weight:  46           /* 10-100 → % of the shortest edge, ×0.016 */
 };
 
 var TOOLS = [
@@ -980,7 +980,7 @@ function drawShadow (g, art, ax, ay, L, S) {
    ═══════════════════════════════════════════════════════════════════════ */
 
 function strokeWidth (L, shape) {
-  return (shape.weight / 100) * 0.012 * Math.min(L.iw, L.ih);
+  return (shape.weight / 100) * 0.016 * Math.min(L.iw, L.ih);
 }
 
 function shapeList () {
@@ -1026,23 +1026,40 @@ function drawShapes (g, L, S, ax, ay) {
   }
 }
 
+/* One filled path: a shaft that tapers from tail to head, then a broad
+   swept-back head. A uniform line with a small triangle on the end reads as
+   timid at screenshot scale — the head has to carry the arrow. */
 function drawArrow (g, x1, y1, x2, y2, w) {
-  var ang = Math.atan2(y2 - y1, x2 - x1);
   var len = Math.hypot(x2 - x1, y2 - y1);
-  var head = Math.min(w * 3.6, len * 0.55);      /* never a head longer than the arrow */
-  if (head < 0.5) return;
+  if (len < 0.5) return;
 
-  /* stop the shaft short so the head's point is the tip, not an overlap */
-  var sx = x2 - Math.cos(ang) * head * 0.82;
-  var sy = y2 - Math.sin(ang) * head * 0.82;
-  g.beginPath(); g.moveTo(x1, y1); g.lineTo(sx, sy); g.stroke();
+  /* Proportions taken off a reference marker arrow: the head is ~6× the shaft
+     thickness across, so it dominates rather than decorates. */
+  var L  = Math.min(w * 6.4, len * 0.62);       /* head length, never eats the arrow */
+  var hw = Math.max(w * 3.2, L * 0.55);         /* head half-width */
+  var base  = Math.max(0, len - L);             /* where the barbs sit */
+  /* Only a slight sweep. A deep notch turns the barbs into thin spikes and the
+     head loses the visual mass that makes it read at a glance. */
+  var notch = Math.max(0, len - L * 0.86);
+  var tTail = w * 0.26, tBase = w * 0.62;       /* shaft half-thickness, tail → head */
 
+  g.save();
+  g.translate(x1, y1);
+  g.rotate(Math.atan2(y2 - y1, x2 - x1));
   g.beginPath();
-  g.moveTo(x2, y2);
-  g.lineTo(x2 - Math.cos(ang - 0.42) * head, y2 - Math.sin(ang - 0.42) * head);
-  g.lineTo(x2 - Math.cos(ang + 0.42) * head, y2 - Math.sin(ang + 0.42) * head);
+  g.moveTo(0, -tTail);
+  g.lineTo(notch, -tBase);
+  g.lineTo(base, -hw);
+  g.lineTo(len, 0);
+  g.lineTo(base, hw);
+  g.lineTo(notch, tBase);
+  g.lineTo(0, tTail);
   g.closePath();
   g.fill();
+  /* a hair of stroke with round joins takes the razor edges off the corners */
+  g.lineWidth = w * 0.16; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.stroke();
+  g.restore();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1324,7 +1341,9 @@ function hitShape (p) {
     var s = shapes[i];
     var tol = Math.max(tolerance(), strokeWidth(L, s));
     if (s.type === 'arrow') {
-      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= tol) return i;
+      /* the head is ~6× the shaft across, so a shaft-width tolerance would
+         leave the most clickable part of the arrow unclickable */
+      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, strokeWidth(L, s) * 2.5)) return i;
       continue;
     }
     var x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
