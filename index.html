@@ -120,7 +120,9 @@ button{cursor:pointer;border:none;background:none;padding:0}
 .marks i:nth-child(3){bottom:0;left:0;border-bottom-width:1px;border-left-width:1px}
 .marks i:nth-child(4){bottom:0;right:0;border-bottom-width:1px;border-right-width:1px}
 
-.shotwrap{max-width:100%;max-height:100%;display:grid;place-items:center;min-width:0;min-height:0}
+.shotwrap{position:relative;max-width:100%;max-height:100%;display:grid;place-items:center;min-width:0;min-height:0}
+#overlay{position:absolute;left:0;top:0;touch-action:none}
+.stage.empty #overlay{display:none}
 #shot{
   display:block;max-width:100%;max-height:100%;
   border-radius:3px;
@@ -227,6 +229,47 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(-
   box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 1px 2px rgba(0,0,0,.4);
 }
 .seg input:focus-visible+label{outline:2px solid var(--amber);outline-offset:-1px}
+
+/* tool palette */
+.tools{
+  position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:3px;
+  padding:3px;border-radius:var(--r-md);background:#0C0C0E;border:1px solid var(--line);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
+}
+.tools input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.tools label{
+  display:grid;justify-items:center;gap:3px;padding:6px 0 5px;border-radius:7px;cursor:pointer;
+  font-size:9.5px;letter-spacing:.02em;color:var(--dim);
+  transition:background .16s var(--ease),color .16s var(--ease);
+}
+.tools label svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.tools label:hover{color:var(--text)}
+.tools input:checked+label{
+  background:linear-gradient(180deg,#2F2A22,#272219);color:var(--amber-lit);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 1px 2px rgba(0,0,0,.4);
+}
+.tools input:focus-visible+label{outline:2px solid var(--amber);outline-offset:-1px}
+
+.cropbar{
+  display:flex;align-items:center;gap:7px;margin-top:9px;padding:7px 8px 7px 11px;
+  border-radius:var(--r-md);background:rgba(232,160,92,.07);
+  box-shadow:inset 0 0 0 1px rgba(232,160,92,.22);
+  font:11px/1 var(--mono);color:var(--amber-lit);font-variant-numeric:tabular-nums;
+}
+.cropbar .spacer{flex:1}
+.cropbar .btn{height:26px;padding:0 9px;font-size:11px}
+
+.colors{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.colors label{position:relative;display:block;cursor:pointer}
+.colors input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.colors .dot{
+  display:block;aspect-ratio:1;border-radius:50%;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18),0 1px 2px rgba(0,0,0,.4);
+  transition:transform .16s var(--ease),box-shadow .16s var(--ease);
+}
+.colors label:hover .dot{transform:translateY(-1px)}
+.colors input:checked+.dot{box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber)}
+.colors input:focus-visible+.dot{box-shadow:inset 0 0 0 1px rgba(255,255,255,.3),0 0 0 2px var(--ink-800),0 0 0 3.5px var(--amber-lit)}
 
 /* swatches */
 .swatches{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
@@ -395,6 +438,7 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
 
     <div class="shotwrap" id="shotWrap">
       <canvas id="shot" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
+      <canvas id="overlay" aria-hidden="true"></canvas>
     </div>
 
     <div class="empty-ui" id="emptyUI">
@@ -418,6 +462,33 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
           <button class="btn btn-quiet" id="pickBtn2">Open…</button>
           <button class="btn btn-quiet" id="sampleBtn2">Sample</button>
           <button class="btn btn-quiet" id="clearBtn" aria-disabled="true">Clear</button>
+        </div>
+      </section>
+
+      <section class="grp">
+        <h2>Tools</h2>
+        <div class="tools" id="toolSeg" role="group" aria-label="Editing tool"></div>
+
+        <div class="cropbar" id="cropBar" hidden>
+          <span id="cropDims">—</span>
+          <span class="spacer"></span>
+          <button class="btn btn-quiet" id="cropDone">Done</button>
+          <button class="btn btn-quiet" id="cropReset">Reset</button>
+        </div>
+
+        <div class="field" style="margin-top:13px">
+          <div class="field-head"><span style="font-size:12.5px" id="colorLbl">Colour</span></div>
+          <div class="colors" id="colorRow" role="radiogroup" aria-labelledby="colorLbl"></div>
+        </div>
+
+        <div class="field">
+          <div class="field-head"><label for="weight">Weight</label><output id="weightOut" aria-live="off" for="weight">—</output></div>
+          <input type="range" id="weight" min="10" max="100" step="1" aria-describedby="weightOut">
+        </div>
+
+        <div class="row-c" style="justify-content:flex-start">
+          <button class="btn btn-quiet" id="undoBtn" aria-disabled="true">Undo</button>
+          <button class="btn btn-quiet" id="clearShapes" aria-disabled="true">Clear all</button>
         </div>
       </section>
 
@@ -499,6 +570,9 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
         <span><kbd>⌘S</kbd> export</span>
         <span><kbd>⌘C</kbd> copy</span>
         <span><kbd>⌘V</kbd> paste</span>
+        <span><kbd>⌘Z</kbd> undo</span>
+        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd> tools</span>
+        <span><kbd>⌫</kbd> delete</span>
       </div>
     </div>
   </aside>
@@ -594,8 +668,20 @@ var DEFAULTS = {
   ratio:   'auto',
   grain:   true,
   edge:    true,
-  scale:   2
+  scale:   2,
+  color:   '#FF453A',   /* annotation colour */
+  weight:  34           /* 10-100 → % of the shortest edge, ×0.012 */
 };
+
+var TOOLS = [
+  { id:'select',  label:'Select',  key:'v', svg:'<path d="M4.5 2.2 12.6 8.4l-4.1.5-1.9 4z"/>' },
+  { id:'crop',    label:'Crop',    key:'c', svg:'<path d="M4.2 1.6v10.2h10.2M1.6 4.2h10.2v10.2"/>' },
+  { id:'arrow',   label:'Arrow',   key:'a', svg:'<path d="M3 13 12.9 3.1M8.3 2.8h4.9v4.9"/>' },
+  { id:'rect',    label:'Box',     key:'r', svg:'<rect x="2.4" y="3.6" width="11.2" height="8.8" rx="1.6"/>' },
+  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' }
+];
+
+var COLORS = ['#FF453A', '#FF9F0A', '#32D74B', '#0A84FF', '#FFFFFF', '#16181B'];
 
 var STORE_KEY = 'myshot.settings.v1';
 var MAX_DIM = 16384;         /* per-axis canvas limit on every current engine */
@@ -608,6 +694,19 @@ var MAX_AREA = 60e6;         /* ~240 MB of RGBA — beyond this, engines start f
 var state = load();
 var source = null;      /* { img, w, h, name } */
 var sourceRev = 0;
+
+/* Editing state lives outside `state` on purpose: it is meaningless without the
+   image, and the image is never persisted. All coordinates below are in the
+   SOURCE image's own pixels, so a shape stays anchored to what it points at
+   through cropping, ratio changes and either export scale. */
+var tool = 'select';
+var crop = null;        /* {x,y,w,h} in source px, or null */
+var cropping = false;   /* in crop mode the full frame is shown, crop applied on exit */
+var shapes = [];        /* {type,x1,y1,x2,y2,color,weight} */
+var draft = null;       /* the shape currently being dragged out */
+var selected = -1;
+var history = [];
+var view = null;        /* geometry of the last preview paint, for hit-testing */
 
 function load () {
   var s = {};
@@ -682,7 +781,9 @@ function rgba (hex, a) {
    off-canvas caster trick used below. Probe once, pick the right path. */
 var SHADOW_CASTER_OK = (function () {
   try {
-    var c = makeCanvas(8, 8), g = c.getContext('2d');
+    /* willReadFrequently: this canvas exists only to be read back, and without
+       it Chrome logs a readback perf warning on every load */
+    var c = makeCanvas(8, 8), g = c.getContext('2d', { willReadFrequently:true });
     g.shadowColor = 'rgba(0,0,0,1)'; g.shadowBlur = 0; g.shadowOffsetX = 20;
     g.fillStyle = '#000'; g.fillRect(-20, 0, 8, 8);
     return g.getImageData(3, 3, 1, 1).data[3] > 8;
@@ -757,6 +858,19 @@ function drawGrain (g, W, H, S) {
 /* ── artwork (the rounded, clipped screenshot) ─────────────────────────── */
 
 var artCache = { key:'', canvas:null };
+var cropCache = { key:'', canvas:null };
+
+/* A cropped region is lifted out at native size once and cached, so that
+   repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
+function croppedSource (C) {
+  if (C.sx === 0 && C.sy === 0 && C.iw === source.w && C.ih === source.h) return source.img;
+  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
+  if (cropCache.key === key && cropCache.canvas) return cropCache.canvas;
+  var c = makeCanvas(C.iw, C.ih), g = c.getContext('2d');
+  g.drawImage(source.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
+  cropCache.key = key; cropCache.canvas = c;
+  return c;
+}
 
 function downscaleSource (img, dw, dh) {
   /* One giant drawImage downscale aliases; halve repeatedly instead. */
@@ -772,20 +886,24 @@ function downscaleSource (img, dw, dh) {
 }
 
 function getArtwork (L, S) {
+  var C = L.C;
   var aw = Math.max(1, Math.round(L.iw * S)), ah = Math.max(1, Math.round(L.ih * S));
   var r = Math.min(L.radius * S, Math.min(aw, ah) / 2);
-  var key = sourceRev + '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
+  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
+            '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
   if (artCache.key === key && artCache.canvas) return artCache.canvas;
 
   var c = makeCanvas(aw, ah), g = c.getContext('2d');
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
 
-  var src = (aw < L.iw * 0.6) ? downscaleSource(source.img, aw, ah) : source.img;
+  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(C), aw, ah) : source.img;
+  var heavy = src !== source.img;
 
   g.save();
   roundRectPath(g, 0, 0, aw, ah, r);
   g.clip();
-  g.drawImage(src, 0, 0, aw, ah);
+  if (heavy) g.drawImage(src, 0, 0, aw, ah);
+  else g.drawImage(src, C.sx, C.sy, C.iw, C.ih, 0, 0, aw, ah);
   g.restore();
 
   if (state.edge) {
@@ -855,15 +973,98 @@ function drawShadow (g, art, ax, ay, L, S) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   3b · ANNOTATIONS
+   Drawn in paint(), so they land in the preview and in both export scales from
+   the same code — and *not* in getArtwork(), so drawing a shape never
+   invalidates the (expensive) artwork cache.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function strokeWidth (L, shape) {
+  return (shape.weight / 100) * 0.012 * Math.min(L.iw, L.ih);
+}
+
+function shapeList () {
+  return draft ? shapes.concat([draft]) : shapes;
+}
+
+/* source px → output px */
+function mapPoint (L, S, ax, ay, x, y) {
+  return [ax + (x - L.C.sx) * S, ay + (y - L.C.sy) * S];
+}
+
+function drawShapes (g, L, S, ax, ay) {
+  var list = shapeList();
+  if (!list.length) return;
+
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var w = Math.max(1, strokeWidth(L, s) * S);
+    var a = mapPoint(L, S, ax, ay, s.x1, s.y1);
+    var b = mapPoint(L, S, ax, ay, s.x2, s.y2);
+
+    g.save();
+    g.strokeStyle = s.color; g.fillStyle = s.color;
+    g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
+    /* a soft drop shadow is what keeps an annotation legible over both a white
+       panel and a dark terminal, without a second outline colour */
+    g.shadowColor = 'rgba(0,0,0,.30)';
+    g.shadowBlur = w * 1.6;
+    g.shadowOffsetY = w * 0.35;
+
+    if (s.type === 'arrow') drawArrow(g, a[0], a[1], b[0], b[1], w);
+    else if (s.type === 'rect') {
+      roundRectPath(g, Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+                    Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1]), w * 0.9);
+      g.stroke();
+    } else {
+      g.beginPath();
+      g.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2,
+                Math.abs(b[0] - a[0]) / 2, Math.abs(b[1] - a[1]) / 2, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
+  }
+}
+
+function drawArrow (g, x1, y1, x2, y2, w) {
+  var ang = Math.atan2(y2 - y1, x2 - x1);
+  var len = Math.hypot(x2 - x1, y2 - y1);
+  var head = Math.min(w * 3.6, len * 0.55);      /* never a head longer than the arrow */
+  if (head < 0.5) return;
+
+  /* stop the shaft short so the head's point is the tip, not an overlap */
+  var sx = x2 - Math.cos(ang) * head * 0.82;
+  var sy = y2 - Math.sin(ang) * head * 0.82;
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(sx, sy); g.stroke();
+
+  g.beginPath();
+  g.moveTo(x2, y2);
+  g.lineTo(x2 - Math.cos(ang - 0.42) * head, y2 - Math.sin(ang - 0.42) * head);
+  g.lineTo(x2 - Math.cos(ang + 0.42) * head, y2 - Math.sin(ang + 0.42) * head);
+  g.closePath();
+  g.fill();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    4 · LAYOUT + PAINT
    Composition units == the source image's own pixels. `S` is output pixels
    per composition unit: 1 or 2 for export, fit×dpr for the preview. Preview
    and export run the same code, so they cannot drift apart.
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* The visible region of the source. While cropping, the full frame is shown so
+   you can see what you are excluding. */
+function content () {
+  if (!source) return null;
+  var c = (!cropping && crop) ? crop : null;
+  return c ? { sx:c.x, sy:c.y, iw:c.w, ih:c.h }
+           : { sx:0, sy:0, iw:source.w, ih:source.h };
+}
+
 function layout () {
   if (!source) return null;
-  var iw = source.w, ih = source.h;
+  var C = content();
+  var iw = C.iw, ih = C.ih;
   var pad = (state.padding / 100) * Math.max(iw, ih);
   var W = iw + pad * 2, H = ih + pad * 2;
 
@@ -874,7 +1075,7 @@ function layout () {
   }
 
   return {
-    W:W, H:H, iw:iw, ih:ih, pad:pad,
+    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C,
     x:(W - iw) / 2, y:(H - ih) / 2,
     radius:(state.radius / 100) * 0.06 * Math.min(iw, ih)
   };
@@ -915,6 +1116,16 @@ function paint (canvas, S) {
 
   g.drawImage(art, ax, ay);
 
+  /* Annotations are clipped to the artwork, so a shape dragged past the edge
+     stops at the image rather than bleeding onto the background. */
+  if (shapeList().length) {
+    g.save();
+    roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
+    g.clip();
+    drawShapes(g, L, S, ax, ay);
+    g.restore();
+  }
+
   return { W:OW, H:OH };
 }
 
@@ -923,7 +1134,7 @@ function paint (canvas, S) {
    ═══════════════════════════════════════════════════════════════════════ */
 
 var $ = function (id) { return document.getElementById(id); };
-var stage = $('stage'), shot = $('shot');
+var stage = $('stage'), shot = $('shot'), overlay = $('overlay');
 
 var frameQueued = false;
 function requestRender () {
@@ -936,6 +1147,9 @@ function render () {
   var L = layout();
   stage.classList.toggle('empty', !L);
   syncOutputs();
+  /* here rather than only at the mutation sites, so the crop dimensions tick
+     live during a drag and the Undo/Clear buttons can never read stale */
+  syncEditUI();
   if (!L) return;
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
@@ -947,11 +1161,337 @@ function render () {
   var fit = Math.min(availW / L.W, availH / L.H, 1);
   var dpr = window.devicePixelRatio || 1;
 
-  paint(shot, fit * dpr);
+  var S = fit * dpr;
+  paint(shot, S);
   /* floor, so a rounding overshoot can never hit max-width:100% and squash the aspect */
-  shot.style.width  = Math.floor(L.W * fit) + 'px';
-  shot.style.height = Math.floor(L.H * fit) + 'px';
+  var cssW = Math.floor(L.W * fit), cssH = Math.floor(L.H * fit);
+  shot.style.width  = cssW + 'px';
+  shot.style.height = cssH + 'px';
   shot.classList.toggle('alpha', activeBg().kind === 'transparent');
+
+  view = { L:L, S:S, fit:fit, dpr:dpr,
+           ax:Math.round(L.x * S), ay:Math.round(L.y * S),
+           aw:Math.round(L.iw * S), ah:Math.round(L.ih * S) };
+
+  overlay.style.width = cssW + 'px';
+  overlay.style.height = cssH + 'px';
+  overlay.width = shot.width; overlay.height = shot.height;
+  paintOverlay();
+  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
+}
+
+/* ── overlay: crop frame + selection chrome (never exported) ───────────── */
+
+function paintOverlay () {
+  if (!view) return;
+  var g = overlay.getContext('2d');
+  g.clearRect(0, 0, overlay.width, overlay.height);
+  var S = view.S, L = view.L;
+
+  if (cropping) {
+    var r = cropRectOnCanvas();
+    g.fillStyle = 'rgba(6,6,8,.58)';
+    g.fillRect(0, 0, overlay.width, overlay.height);
+    g.clearRect(r.x, r.y, r.w, r.h);
+
+    /* Thirds guides and the frame are drawn dark-then-light: a single white
+       line disappears over a white screenshot, which is most of them. */
+    var u = view.dpr;
+    g.beginPath();
+    for (var i = 1; i < 3; i++) {
+      g.moveTo(r.x + r.w * i / 3, r.y);       g.lineTo(r.x + r.w * i / 3, r.y + r.h);
+      g.moveTo(r.x, r.y + r.h * i / 3);       g.lineTo(r.x + r.w, r.y + r.h * i / 3);
+    }
+    g.strokeStyle = 'rgba(0,0,0,.30)'; g.lineWidth = 3 * u; g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1 * u; g.stroke();
+
+    g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 3 * u;
+    g.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+    g.strokeStyle = 'rgba(255,255,255,.95)'; g.lineWidth = 1 * u;
+    g.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+
+    var hs = 9 * view.dpr;
+    g.fillStyle = '#fff'; g.strokeStyle = 'rgba(0,0,0,.55)';
+    var pts = handlePoints(r);
+    for (var k in pts) {
+      g.fillRect(pts[k][0] - hs / 2, pts[k][1] - hs / 2, hs, hs);
+      g.strokeRect(pts[k][0] - hs / 2 + .5, pts[k][1] - hs / 2 + .5, hs - 1, hs - 1);
+    }
+    return;
+  }
+
+  if (selected >= 0 && selected < shapes.length) {
+    var s = shapes[selected];
+    var a = mapPoint(L, S, view.ax, view.ay, s.x1, s.y1);
+    var b = mapPoint(L, S, view.ax, view.ay, s.x2, s.y2);
+    var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
+    var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
+    var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
+    g.strokeStyle = 'rgba(232,160,92,.95)';
+    g.lineWidth = Math.max(1, view.dpr);
+    g.setLineDash([5 * view.dpr, 4 * view.dpr]);
+    g.strokeRect(x, y, w, h);
+    g.setLineDash([]);
+  }
+}
+
+function cropRectOnCanvas () {
+  var r = crop || { x:0, y:0, w:source.w, h:source.h };
+  var S = view.S;
+  return {
+    x:Math.round(view.ax + r.x * S), y:Math.round(view.ay + r.y * S),
+    w:Math.round(r.w * S),           h:Math.round(r.h * S)
+  };
+}
+
+function handlePoints (r) {
+  return {
+    nw:[r.x, r.y],             n:[r.x + r.w / 2, r.y],         ne:[r.x + r.w, r.y],
+    w: [r.x, r.y + r.h / 2],                                   e: [r.x + r.w, r.y + r.h / 2],
+    sw:[r.x, r.y + r.h],       s:[r.x + r.w / 2, r.y + r.h],   se:[r.x + r.w, r.y + r.h]
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   5b · EDITING — pointer interaction on the overlay
+   ═══════════════════════════════════════════════════════════════════════ */
+
+var MIN_CROP = 24;
+var drag = null;
+
+function pushHistory () {
+  history.push(JSON.stringify({ crop:crop, shapes:shapes }));
+  if (history.length > 60) history.shift();
+  syncEditUI();
+}
+
+function undo () {
+  if (!history.length) return;
+  var prev = JSON.parse(history.pop());
+  crop = prev.crop; shapes = prev.shapes;
+  selected = -1; draft = null;
+  artCache.key = '';
+  syncEditUI(); requestRender();
+}
+
+function clamp (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* Crop rects are kept on whole source pixels: a fractional source rect makes
+   drawImage resample the region instead of lifting it out 1:1. */
+function setCrop (x, y, w, h) {
+  x = Math.round(clamp(x, 0, source.w));
+  y = Math.round(clamp(y, 0, source.h));
+  crop = {
+    x:x, y:y,
+    w:Math.max(0, Math.round(Math.min(w, source.w - x))),
+    h:Math.max(0, Math.round(Math.min(h, source.h - y)))
+  };
+}
+
+/* client coords → source-image px */
+function toSource (e) {
+  var r = overlay.getBoundingClientRect();
+  var cx = (e.clientX - r.left) / view.fit;      /* → composition units */
+  var cy = (e.clientY - r.top) / view.fit;
+  return { x:cx - view.L.x + view.L.C.sx, y:cy - view.L.y + view.L.C.sy };
+}
+
+/* how many source px a comfortable 10 css px target is worth right now */
+function tolerance () { return 10 / view.fit; }
+
+function hitHandle (e) {
+  var r = cropRectOnCanvas(), pts = handlePoints(r);
+  var b = overlay.getBoundingClientRect();
+  var px = (e.clientX - b.left) * view.dpr, py = (e.clientY - b.top) * view.dpr;
+  var tol = 11 * view.dpr;
+  for (var k in pts) {
+    if (Math.abs(px - pts[k][0]) <= tol && Math.abs(py - pts[k][1]) <= tol) return k;
+  }
+  return null;
+}
+
+function distToSegment (px, py, x1, y1, x2, y2) {
+  var dx = x2 - x1, dy = y2 - y1;
+  var len2 = dx * dx + dy * dy;
+  var t = len2 ? clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1) : 0;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+/* Shapes are stroked outlines, so "hit" means near the outline — topmost first. */
+function hitShape (p) {
+  var L = view.L;
+  for (var i = shapes.length - 1; i >= 0; i--) {
+    var s = shapes[i];
+    var tol = Math.max(tolerance(), strokeWidth(L, s));
+    if (s.type === 'arrow') {
+      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= tol) return i;
+      continue;
+    }
+    var x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
+    var w = Math.abs(s.x2 - s.x1), h = Math.abs(s.y2 - s.y1);
+    if (s.type === 'rect') {
+      var onX = p.x >= x - tol && p.x <= x + w + tol;
+      var onY = p.y >= y - tol && p.y <= y + h + tol;
+      var nearV = Math.abs(p.x - x) <= tol || Math.abs(p.x - (x + w)) <= tol;
+      var nearH = Math.abs(p.y - y) <= tol || Math.abs(p.y - (y + h)) <= tol;
+      if ((onX && nearH) || (onY && nearV)) return i;
+    } else {
+      var rx = w / 2, ry = h / 2;
+      if (rx < 1 || ry < 1) continue;
+      var nx = (p.x - (x + rx)) / rx, ny = (p.y - (y + ry)) / ry;
+      var d = Math.abs(Math.hypot(nx, ny) - 1);
+      if (d <= tol / Math.min(rx, ry) + 0.04) return i;
+    }
+  }
+  return -1;
+}
+
+overlay.addEventListener('pointerdown', function (e) {
+  if (!view || e.button !== 0) return;
+  overlay.setPointerCapture(e.pointerId);
+  var p = toSource(e);
+
+  if (cropping) {
+    pushHistory();                          /* one gesture, one undo step */
+    var h = hitHandle(e);
+    if (h) { drag = { kind:'crop-resize', edge:h, start:p, orig:cropOrFull() }; return; }
+    /* Only an explicit selection can be dragged around. With no crop set there
+       is nothing to move, so a press inside the image starts a fresh one. */
+    var c = crop;
+    if (c && p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
+      drag = { kind:'crop-move', start:p, orig:{ x:c.x, y:c.y, w:c.w, h:c.h } };
+    } else {
+      setCrop(p.x, p.y, 0, 0);
+      drag = { kind:'crop-new', start:{ x:crop.x, y:crop.y } };
+    }
+    requestRender();
+    return;
+  }
+
+  if (tool === 'select') {
+    selected = hitShape(p);
+    paintOverlay();
+    syncEditUI();
+    return;
+  }
+
+  /* drawing: clamp to the visible image so a shape can't be lost off-frame */
+  var C = view.L.C;
+  var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
+  draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
+  drag = { kind:'draw' };
+});
+
+overlay.addEventListener('pointermove', function (e) {
+  if (!drag || !view) return;
+  var p = toSource(e);
+
+  if (drag.kind === 'draw') {
+    var C = view.L.C;
+    draft.x2 = clamp(p.x, C.sx, C.sx + C.iw);
+    draft.y2 = clamp(p.y, C.sy, C.sy + C.ih);
+    if (e.shiftKey && draft.type !== 'arrow') {          /* shift = square / circle */
+      var side = Math.max(Math.abs(draft.x2 - draft.x1), Math.abs(draft.y2 - draft.y1));
+      draft.x2 = draft.x1 + Math.sign(draft.x2 - draft.x1 || 1) * side;
+      draft.y2 = draft.y1 + Math.sign(draft.y2 - draft.y1 || 1) * side;
+    }
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-new') {
+    var x1 = clamp(drag.start.x, 0, source.w), y1 = clamp(drag.start.y, 0, source.h);
+    var x2 = clamp(p.x, 0, source.w), y2 = clamp(p.y, 0, source.h);
+    setCrop(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-move') {
+    var o = drag.orig;
+    setCrop(clamp(o.x + (p.x - drag.start.x), 0, source.w - o.w),
+            clamp(o.y + (p.y - drag.start.y), 0, source.h - o.h), o.w, o.h);
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'crop-resize') {
+    var g = drag.orig, edge = drag.edge;
+    var l = g.x, t = g.y, rr = g.x + g.w, bb = g.y + g.h;
+    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, source.w);
+    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, source.w);
+    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, source.h);
+    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, source.h);
+    /* normalise rather than clamp against the opposite edge, so dragging a
+       handle past its opposite flips the selection the way every crop tool
+       does, instead of collapsing to the minimum size */
+    setCrop(Math.min(l, rr), Math.min(t, bb), Math.abs(rr - l), Math.abs(bb - t));
+    requestRender();
+  }
+});
+
+function endDrag () {
+  if (!drag) return;
+  var kind = drag.kind;
+  drag = null;
+
+  if (kind === 'draw') {
+    var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
+    if (len < tolerance()) { draft = null; requestRender(); return; }   /* a stray click */
+    pushHistory();
+    shapes.push(draft);
+    draft = null;
+    requestRender();
+    return;
+  }
+
+  /* too small to have been meant, or the whole frame — either way, no crop */
+  if (crop && (crop.w < MIN_CROP || crop.h < MIN_CROP)) crop = null;
+  if (crop && crop.x <= 0 && crop.y <= 0 && crop.w >= source.w && crop.h >= source.h) crop = null;
+  artCache.key = '';
+  syncEditUI();
+  requestRender();
+}
+overlay.addEventListener('pointerup', endDrag);
+overlay.addEventListener('pointercancel', endDrag);
+
+function cropOrFull () {
+  return crop || { x:0, y:0, w:source.w, h:source.h };
+}
+
+function setTool (id) {
+  tool = id;                        /* leaving crop mode commits the pending crop */
+  cropping = (id === 'crop');
+  if (cropping && !crop) {
+    /* open with a sensible starting selection rather than nothing (history
+       first — it has to record the state being replaced, not the new one) */
+    pushHistory();
+    setCrop(source.w * .12, source.h * .12, source.w * .76, source.h * .76);
+  }
+  if (id !== 'select') selected = -1;
+  var radio = $('tool-' + id);
+  if (radio) radio.checked = true;
+  syncEditUI();
+  artCache.key = '';
+  requestRender();
+}
+
+function syncEditUI () {
+  $('cropBar').hidden = !cropping;
+  if (cropping) {
+    var c = cropOrFull();
+    $('cropDims').textContent = fmt(c.w) + ' × ' + fmt(c.h);
+  }
+  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (shapes.length || crop) ? 'false' : 'true');
+}
+
+function resetEditing () {
+  tool = 'select'; cropping = false; crop = null;
+  shapes = []; draft = null; selected = -1; history = [];
+  cropCache.key = ''; cropCache.canvas = null;
+  var r = $('tool-select'); if (r) r.checked = true;
+  syncEditUI();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -979,7 +1519,11 @@ function syncOutputs () {
     $(key).setAttribute('aria-valuetext', readouts[key]);
   }
 
-  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) : '—';
+  $('weightOut').value = L ? fmt(Math.max(1, (state.weight / 100) * 0.012 * Math.min(L.iw, L.ih))) + ' px'
+                           : Math.round(state.weight) + '%';
+  $('weight').setAttribute('aria-valuetext', $('weightOut').value);
+
+  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (crop && !cropping ? ' cropped' : '') : '—';
   if (L) {
     var s = exportScale(L);
     $('metaOut').textContent = fmt(L.W * s) + '×' + fmt(L.H * s) + (s !== state.scale ? ' ·' + s + '×' : '');
@@ -1103,6 +1647,7 @@ function loadImage (blob, name) {
     source = { img:img, w:w, h:h, name:name };
     sourceRev++;
     artCache.key = '';
+    resetEditing();     /* a crop or an arrow means nothing against a different image */
     $('fileChip').hidden = false;
     $('fileName').textContent = name;
     render();
@@ -1125,6 +1670,7 @@ function loadImage (blob, name) {
 function clearImage () {
   if (source && source.img && typeof source.img.close === 'function') source.img.close();
   source = null; sourceRev++; artCache.key = ''; artCache.canvas = null;
+  resetEditing();
   $('fileChip').hidden = true;
   render();
 }
@@ -1196,7 +1742,7 @@ function loadSample () {
   function useCanvasDirect () {
     if (source && source.img && typeof source.img.close === 'function') source.img.close();
     source = { img:c, w:W, h:H, name:'sample.png' };
-    sourceRev++; artCache.key = '';
+    sourceRev++; artCache.key = ''; resetEditing();
     $('fileChip').hidden = false; $('fileName').textContent = 'sample.png';
     render();
   }
@@ -1221,6 +1767,69 @@ function buildSeg (host, name, items, current, onPick) {
     host.appendChild(input); host.appendChild(label);
   });
 }
+
+/* tool palette */
+(function buildTools () {
+  var host = $('toolSeg');
+  TOOLS.forEach(function (t) {
+    var input = document.createElement('input');
+    input.type = 'radio'; input.name = 'tool'; input.id = 'tool-' + t.id; input.value = t.id;
+    input.checked = tool === t.id;
+    input.setAttribute('aria-label', t.label + ' tool (' + t.key.toUpperCase() + ')');
+    var label = document.createElement('label');
+    label.setAttribute('for', 'tool-' + t.id);
+    label.title = t.label + '  ·  ' + t.key.toUpperCase();
+    label.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true">' + t.svg + '</svg><span>' + t.label + '</span>';
+    input.addEventListener('change', function () { if (input.checked) setTool(t.id); });
+    host.appendChild(input); host.appendChild(label);
+  });
+})();
+
+/* annotation colours */
+(function buildColors () {
+  var host = $('colorRow');
+  COLORS.forEach(function (hex) {
+    var label = document.createElement('label');
+    var input = document.createElement('input');
+    input.type = 'radio'; input.name = 'annocolor'; input.value = hex;
+    input.checked = state.color.toLowerCase() === hex.toLowerCase();
+    input.setAttribute('aria-label', 'Annotation colour ' + hex);
+    var dot = document.createElement('span');
+    dot.className = 'dot'; dot.style.background = hex;
+    input.addEventListener('change', function () {
+      if (!input.checked) return;
+      state.color = hex;
+      /* retint the selected shape, so the swatch acts on what you have chosen */
+      if (selected >= 0 && shapes[selected]) { pushHistory(); shapes[selected].color = hex; }
+      save(); requestRender();
+    });
+    label.appendChild(input); label.appendChild(dot);
+    host.appendChild(label);
+  });
+})();
+
+$('weight').value = state.weight;
+fillTrack($('weight'));
+$('weight').addEventListener('input', function () {
+  state.weight = parseFloat($('weight').value);
+  fillTrack($('weight'));
+  if (selected >= 0 && shapes[selected]) shapes[selected].weight = state.weight;
+  save(); requestRender();
+});
+
+$('undoBtn').addEventListener('click', undo);
+$('clearShapes').addEventListener('click', function () {
+  if (!shapes.length && !crop) return;
+  pushHistory();
+  shapes = []; crop = null; selected = -1; cropping = false;
+  artCache.key = '';
+  setTool('select');
+  toast('Annotations and crop cleared', 'ok');
+});
+$('cropDone').addEventListener('click', function () { setTool('select'); });
+$('cropReset').addEventListener('click', function () {
+  pushHistory(); crop = null; artCache.key = ''; syncEditUI(); requestRender();
+});
 
 buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
   state.ratio = id; save(); requestRender();
@@ -1350,7 +1959,9 @@ $('resetBtn').addEventListener('click', function () {
 });
 
 function syncControls () {
-  ['padding', 'radius', 'shadow'].forEach(function (k) { $(k).value = state[k]; fillTrack($(k)); });
+  ['padding', 'radius', 'shadow', 'weight'].forEach(function (k) { $(k).value = state[k]; fillTrack($(k)); });
+  var cr = $('colorRow').querySelector('input[value="' + state.color + '"]');
+  if (cr) cr.checked = true;
   $('edge').checked = state.edge;
   $('grain').checked = state.grain;
   colorEl.value = state.custom;
@@ -1429,9 +2040,36 @@ function isTyping (el) {
 }
 
 window.addEventListener('keydown', function (e) {
-  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
   var k = (e.key || '').toLowerCase();
 
+  /* unmodified keys: tool switching and editing */
+  if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (isTyping(document.activeElement)) return;
+
+    if (k === 'escape') {
+      if (cropping) { setTool('select'); return; }
+      if (selected >= 0) { selected = -1; paintOverlay(); return; }
+      hideToast(); return;
+    }
+    if ((k === 'delete' || k === 'backspace') && selected >= 0 && shapes[selected]) {
+      e.preventDefault();
+      pushHistory();
+      shapes.splice(selected, 1); selected = -1;
+      requestRender();
+      return;
+    }
+    if (k === 'enter' && cropping) { e.preventDefault(); setTool('select'); return; }
+    if (source) {
+      for (var i = 0; i < TOOLS.length; i++) {
+        if (TOOLS[i].key === k) { e.preventDefault(); setTool(TOOLS[i].id); return; }
+      }
+    }
+    return;
+  }
+
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
   if (k === 's') { e.preventDefault(); doExport(); return; }
   if (k === 'o') { e.preventDefault(); $('filePicker').click(); return; }
   if (k === 'c') {
@@ -1464,8 +2102,7 @@ function toast (msg, kind, action) {
 
   toastTimer = setTimeout(hideToast, action ? 12000 : kind === 'err' ? 6000 : 2600);
 }
-function hideToast () { toastEl.classList.remove('on'); }
-window.addEventListener('keydown', function (e) { if (e.key === 'Escape') hideToast(); });
+function hideToast () { toastEl.classList.remove('on'); }   /* Escape is routed in §10 */
 
 /* ═══════════════════════════════════════════════════════════════════════════
    12 · BOOT
@@ -1487,6 +2124,7 @@ if (window.ResizeObserver) new ResizeObserver(requestRender).observe(stage);
 })();
 
 syncControls();
+syncEditUI();
 render();
 
 })();

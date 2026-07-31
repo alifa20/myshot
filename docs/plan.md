@@ -160,3 +160,48 @@ so this ran against a private headless Chrome 151 over a small CDP driver.
 
 **Deviations from the plan above**: none in architecture. The off-canvas shadow caster works (the
 runtime probe returns true in Chrome), so the fallback path is untaken there but retained.
+
+---
+
+## 6. Follow-up: crop + annotation (requested after the first commit)
+
+Explicitly requested, and scoped by the user to **crop + arrow / box / ellipse** — text, highlighter
+and blur/redaction were offered and deliberately not taken, so they stay out.
+
+**Model.** `crop` is a rectangle on whole source pixels; `shapes` are `{type,x1,y1,x2,y2,color,weight}`
+in the **source image's own pixels**. Both live outside `state`, so neither is persisted — they are
+meaningless against a different image, and loading one resets them. Coordinates in source space is
+what makes a shape stay anchored to what it points at through a crop, a ratio change, and either
+export scale.
+
+- Crop is **non-destructive**: entering crop mode shows the full frame again with the selection over
+  it, so you can readjust or reset rather than losing pixels. `content()` is the single place that
+  decides what region is visible.
+- Annotations render in `paint()`, not `getArtwork()` — so drawing never invalidates the artwork
+  cache. Verified: a live shape drag holds ~16.6 ms on a 3360×2000 source.
+- Editing chrome (dim, thirds guides, handles, selection outline) is drawn on a **separate overlay
+  canvas**, which makes it structurally impossible for UI to leak into an export.
+- One gesture is one undo step; history stores whole `{crop, shapes}` snapshots, capped at 60.
+
+**Verification** — 19 checks driven through real CDP mouse and key events, asserting on canvas pixel
+counts rather than DOM state, plus the 10 base checks re-run: **29/29, console clean.** Covers each
+tool via its keyboard shortcut, colour selection, shift-constrain, `⌘Z`, click-select, `⌫` delete,
+crop new/move/resize/flip, `Enter` apply, Reset, Clear all, that annotations survive a crop, and that
+the export matches the cropped readout exactly.
+
+**Found and fixed here**
+
+1. `Clear all` stayed greyed out after drawing, and the crop dimensions did not tick during a drag —
+   `syncEditUI()` only ran at mutation sites. Now it runs on the render path.
+2. Dragging a crop handle past its opposite collapsed the selection to the 24 px minimum. Now the
+   rect normalises, so the handle flips, which is what every real crop tool does.
+3. After a Reset, dragging inside the image *moved* an implicit full-frame selection instead of
+   starting a fresh one — a full-frame crop is now treated as no crop at all, and only an explicit
+   selection can be moved.
+4. Crop rects were fractional, which makes `drawImage` resample the region instead of lifting it out
+   1:1. They are now rounded to whole source pixels.
+5. `setTool` pushed the undo snapshot *after* setting the opening crop, so undoing it was a no-op.
+6. Crop guides and frame were white-on-white and vanished over a light screenshot. Now dark-then-light.
+7. The app's own shadow-probe canvas triggered Chrome's `getImageData` readback warning on every
+   load; it now passes `willReadFrequently`. This was the one console message in the whole app, and
+   it is worth recording that it came from the app rather than the test harness.

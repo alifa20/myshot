@@ -27,6 +27,26 @@ Every control is live — there is nothing to apply. Settings (not the image) pe
 X/Twitter), 12 background presets (6 mesh, 3 gradient, 3 solid) plus transparent and a custom
 colour, edge definition, grain, and 1× / 2× export scale.
 
+### Cropping and annotating
+
+Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow · `R` box · `E` ellipse.
+
+- **Crop** shows the full frame again with a selection over it: drag outside the box to start a new
+  one, inside it to move it, or grab any of the 8 handles to resize (dragging a handle past its
+  opposite flips the selection). Thirds guides while you work, live dimensions in the bar, `Enter`
+  or **Done** to apply, **Reset** to restore the full frame. It is **non-destructive** — the crop is
+  a stored rectangle, so you can reopen and readjust it, and nothing is ever thrown away.
+- **Arrow / box / ellipse** drag out from the point you press. Six colours, one weight slider that
+  scales with the image, and `shift` constrains a box to a square or an ellipse to a circle.
+- **Select** then click a shape to select it, `⌫` to delete. `⌘Z` undoes any edit, **Clear all**
+  removes everything. Changing the colour or weight while a shape is selected retints that shape.
+
+Annotations are stored in the **source image's own pixels**, not screen coordinates, so they stay
+anchored to whatever they point at through cropping, ratio changes and either export scale — and
+they are drawn by the same `paint()` as everything else, so a 2× export renders them at full
+resolution rather than scaling up a preview. They are clipped to the artwork, so a shape dragged
+past the edge stops at the image instead of bleeding onto the background.
+
 ## How it renders
 
 One function paints the composition at any scale, and both the live preview and the export call it.
@@ -53,7 +73,14 @@ They cannot drift apart, because the same code produces both.
 - **Grain** is a cached 128×128 noise tile at ±2.5/255 — invisible as texture, but it dithers away
   the banding that 8-bit canvas gradients produce.
 - Large sources are downscaled to preview size by successive halving; the artwork is cached on
-  `(image, scale, radius, edge)`, so dragging padding or shadow never re-renders the image.
+  `(image, crop, scale, radius, edge)`, so dragging padding or shadow never re-renders the image.
+  A cropped region is lifted out at native size once and cached too, on whole pixels — a fractional
+  source rect would make `drawImage` resample the region instead of copying it 1:1.
+- Annotations are drawn in `paint()` rather than into the artwork, so drawing a shape never
+  invalidates that cache: a live shape drag stays at ~16 ms even on a 3360×2000 source.
+- Crop handles and selection chrome live on a **separate overlay canvas**, so editing UI is
+  structurally incapable of reaching the export. Its guides are drawn dark-then-light, because a
+  single white line disappears over a white screenshot — which is most screenshots.
 
 ## Guardrails
 
