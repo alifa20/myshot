@@ -350,6 +350,85 @@ dialog#fallback::backdrop{background:rgba(0,0,0,.45);-webkit-backdrop-filter:blu
 }
 .sheet-foot .note{margin-right:auto;font-size:11.5px;color:var(--text-faint)}
 
+/* ============================================================
+   annotation layer
+   ============================================================ */
+.canvas-shell{position:relative}
+#overlay{
+  position:absolute;left:0;top:0;display:block;
+  border-radius:3px;
+}
+.canvas-shell[data-tool="select"] #overlay{cursor:default}
+.canvas-shell[data-tool="crop"] #overlay{cursor:crosshair}
+.canvas-shell[data-tool="text"] #overlay{cursor:text}
+.canvas-shell[data-draw="1"] #overlay{cursor:crosshair}
+
+/* floating tool strip */
+.toolbar{
+  /* clears the 34px stage footer so it never covers the size caption */
+  position:absolute;left:50%;bottom:46px;transform:translateX(-50%);
+  z-index:6;display:flex;align-items:center;gap:3px;
+  padding:5px;border-radius:13px;
+  background:color-mix(in srgb,var(--panel) 88%,transparent);
+  border:1px solid var(--line-strong);
+  box-shadow:0 14px 40px -10px rgba(0,0,0,.6),0 1px 0 rgba(255,255,255,.06) inset;
+  -webkit-backdrop-filter:saturate(180%) blur(22px);backdrop-filter:saturate(180%) blur(22px);
+}
+.tool{
+  width:32px;height:32px;border:0;border-radius:9px;background:transparent;color:var(--text-dim);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:background .12s,color .12s;
+}
+.tool:hover{background:var(--panel-hi);color:var(--text)}
+.tool[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.tool svg{width:17px;height:17px}
+.tool-sep{width:1px;height:20px;background:var(--line-strong);margin:0 4px}
+
+.tool-color{
+  position:relative;width:32px;height:32px;border-radius:9px;overflow:hidden;flex:0 0 auto;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.tool-color i{
+  display:block;width:18px;height:18px;border-radius:50%;background:var(--anno-color,#ff3b30);
+  box-shadow:0 0 0 1px rgba(0,0,0,.28),0 0 0 2px rgba(255,255,255,.5);
+}
+.tool-color input{position:absolute;inset:-6px;width:calc(100% + 12px);height:calc(100% + 12px);padding:0;border:0;background:none;cursor:pointer;opacity:0}
+
+.tool-width{display:flex;align-items:center;gap:3px;padding:0 3px}
+.tool-width button{
+  width:24px;height:26px;border:0;border-radius:7px;background:transparent;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.tool-width button:hover{background:var(--panel-hi)}
+.tool-width button[aria-pressed="true"]{background:var(--panel-hi)}
+.tool-width i{display:block;background:var(--text-dim);border-radius:99px;width:15px}
+.tool-width button[aria-pressed="true"] i{background:var(--text)}
+
+/* crop confirm bar */
+.crop-bar{
+  position:absolute;left:50%;bottom:92px;transform:translateX(-50%);
+  z-index:7;display:none;align-items:center;gap:8px;
+  padding:7px 9px;border-radius:11px;
+  background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--line-strong);
+  box-shadow:0 14px 40px -10px rgba(0,0,0,.6);
+  -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  font-size:12px;color:var(--text-dim);white-space:nowrap;
+}
+body.cropping .crop-bar{display:flex}
+.crop-bar b{color:var(--text);font-variant-numeric:tabular-nums;font-weight:560}
+
+/* inline text annotation editor */
+.text-editor{
+  position:absolute;z-index:8;margin:0;padding:0 2px;
+  border:1px dashed color-mix(in srgb,var(--accent) 70%,transparent);
+  border-radius:3px;background:rgba(127,127,127,.16);
+  color:inherit;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+  font-weight:600;line-height:1.2;white-space:pre;outline:none;
+  -webkit-user-select:text;user-select:text;
+}
+.text-editor[hidden]{display:none}
+
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
@@ -440,14 +519,28 @@ dialog#fallback::backdrop{background:rgba(0,0,0,.45);-webkit-backdrop-filter:blu
 
     <main class="stage" id="stage">
       <div class="canvas-area">
-        <div class="canvas-shell" id="canvasShell">
+        <div class="canvas-shell" id="canvasShell" data-tool="select">
           <canvas id="preview" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
+          <!-- Chrome (crop handles, selection, in-progress shapes) lives on its own
+               canvas above the preview, so it can never reach the export: export
+               calls render() only, and render() never touches this layer. -->
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div class="text-editor" id="textEditor" contenteditable="plaintext-only" hidden spellcheck="false"></div>
           <button class="demo-badge" id="demoBadge" title="Open a screenshot of your own">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5"/><path d="M12 8.2v.01"/></svg>
             Demo image — drop or paste your own
           </button>
         </div>
       </div>
+      <div class="crop-bar" id="cropBar">
+        Crop <b id="cropDims">—</b>
+        <button class="btn" id="cropReset" style="height:24px">Reset</button>
+        <button class="btn" id="cropCancel" style="height:24px">Cancel <kbd>esc</kbd></button>
+        <button class="btn primary" id="cropApply" style="height:24px">Apply <kbd>⏎</kbd></button>
+      </div>
+
+      <div class="toolbar" id="toolbar" role="toolbar" aria-label="Annotation tools"></div>
+
       <div class="stage-foot">
         <span id="sizeInfo">—</span>
       </div>
@@ -503,8 +596,18 @@ const DEFAULTS = {
   radius: 24,     // px in composition space
   shadow: 60,     // 0–100, drives a curated two-layer shadow
   ratio: "auto",
-  scale: 1        // export multiplier
+  scale: 1,       // export multiplier
+  annoColor: "#FF3B30",
+  annoWidth: 4    // stroke width in source pixels
 };
+
+/* Image-scoped document state. Deliberately NOT part of `state`: crop and
+   annotations belong to a particular image, and the image has never persisted.
+   Keeping them in a separate object makes it impossible to leak them into
+   localStorage by accident. */
+const doc = { crop: null, annotations: [], selected: null };
+
+const STROKE_WIDTHS = [2, 4, 7, 12];
 
 const RATIOS = [
   { id: "auto",    label: "Auto",    r: null },
@@ -630,6 +733,8 @@ function loadSettings() {
   if (Number.isFinite(saved.shadow))  state.shadow  = clamp(saved.shadow, 0, 100);
   if (RATIOS.some(r => r.id === saved.ratio)) state.ratio = saved.ratio;
   if (saved.scale === 1 || saved.scale === 2) state.scale = saved.scale;
+  if (normHex(saved.annoColor)) state.annoColor = normHex(saved.annoColor);
+  if (STROKE_WIDTHS.indexOf(saved.annoWidth) >= 0) state.annoWidth = saved.annoWidth;
 }
 
 let saveTimer = 0;
@@ -644,9 +749,27 @@ function saveSettings() {
    3. layout — everything in "composition space" (image at natural size)
    ========================================================================== */
 
+/** The region of the source bitmap that is actually shown. Crop is
+ *  non-destructive: nothing is discarded, so it stays adjustable. */
+function srcRect() {
+  const fullW = image ? image.width  : 1200;
+  const fullH = image ? image.height : 800;
+  const c = doc.crop;
+  if (!c) return { sx: 0, sy: 0, sw: fullW, sh: fullH, fullW: fullW, fullH: fullH };
+  const sx = clamp(Math.round(c.x), 0, fullW - 1);
+  const sy = clamp(Math.round(c.y), 0, fullH - 1);
+  return {
+    sx: sx, sy: sy,
+    sw: clamp(Math.round(c.w), 1, fullW - sx),
+    sh: clamp(Math.round(c.h), 1, fullH - sy),
+    fullW: fullW, fullH: fullH
+  };
+}
+
 function layout() {
-  const iw = image ? image.width  : 1200;
-  const ih = image ? image.height : 800;
+  const S = srcRect();
+  const iw = S.sw;
+  const ih = S.sh;
 
   // Padding is proportional to the image, not an absolute pixel count: 64px
   // around a 320px thumbnail and around a 3200px retina capture are different
@@ -668,10 +791,17 @@ function layout() {
   compH = Math.max(1, Math.round(compH));
 
   return {
-    iw, ih, unit, pad, compW, compH,
+    iw, ih, unit, pad, compW, compH, src: S,
     imgX: Math.round((compW - iw) / 2),
     imgY: Math.round((compH - ih) / 2)
   };
+}
+
+/** Map a point in source-image pixels to composition space. Annotations are
+ *  stored in source pixels so they stay pinned to image features when padding,
+ *  ratio or the crop changes. */
+function srcToComp(L, x, y) {
+  return { x: L.imgX + (x - L.src.sx), y: L.imgY + (y - L.src.sy) };
 }
 
 /** Two-layer shadow, sized relative to the image so it stays proportional. */
@@ -788,9 +918,10 @@ let cardCache = { key: "", canvas: null };
 
 function buildCard(scale) {
   const L = layout();
+  const S = L.src;
   const w = Math.max(1, Math.round(L.iw * scale));
   const h = Math.max(1, Math.round(L.ih * scale));
-  const key = imageToken + "|" + w + "|" + h + "|" + state.radius;
+  const key = [imageToken, w, h, state.radius, S.sx, S.sy, S.sw, S.sh].join("|");
   if (cardCache.key === key && cardCache.canvas) return cardCache.canvas;
 
   const c = cardCache.canvas && cardCache.canvas.width === w && cardCache.canvas.height === h
@@ -809,7 +940,8 @@ function buildCard(scale) {
   g.clip();
   // Sourced from the *original* bitmap at the target device size — never
   // rendered at 1× and upscaled, which would waste the only real resolution.
-  if (image) g.drawImage(image, 0, 0, w, h);
+  // The 9-argument form is what makes crop non-destructive.
+  if (image) g.drawImage(image, S.sx, S.sy, S.sw, S.sh, 0, 0, w, h);
   // Inner hairline: half of it is clipped away, so it reads as a ~0.5px
   // highlight along the top edge. Subtle enough to survive any screenshot.
   g.lineWidth = Math.max(1, scale);
@@ -917,6 +1049,165 @@ function getShadowSprite(card, layers, scale) {
 }
 
 /* ============================================================================
+   5c. annotations
+   --------------------------------------------------------------------------
+   Stored in SOURCE-IMAGE pixels and drawn under ctx.scale(scale), so stroke
+   widths and type sizes scale into the export for free and the existing
+   scale-invariance test covers this layer without modification.
+   ========================================================================== */
+
+const ANNO_FONT = '-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif';
+
+function textFontSize(a) { return a.size || Math.max(14, a.width * 5); }
+function annoFont(a) { return "600 " + textFontSize(a) + "px " + ANNO_FONT; }
+
+/** Bounding box of an annotation, in source pixels. */
+function annoBounds(a) {
+  if (a.type === "arrow") {
+    return { x: Math.min(a.x1, a.x2), y: Math.min(a.y1, a.y2),
+             w: Math.abs(a.x2 - a.x1), h: Math.abs(a.y2 - a.y1) };
+  }
+  if (a.type === "text") {
+    const m = measureAnnoText(a);
+    return { x: a.x, y: a.y, w: m.w, h: m.h };
+  }
+  if (a.type === "step") {
+    const r = stepRadius(a);
+    return { x: a.x - r, y: a.y - r, w: r * 2, h: r * 2 };
+  }
+  return { x: Math.min(a.x, a.x + a.w), y: Math.min(a.y, a.y + a.h),
+           w: Math.abs(a.w), h: Math.abs(a.h) };
+}
+
+function stepRadius(a) { return Math.max(12, a.width * 3.4); }
+
+let measureCanvas = null;
+function measureAnnoText(a) {
+  measureCanvas = measureCanvas || document.createElement("canvas");
+  const g = measureCanvas.getContext("2d");
+  g.font = annoFont(a);
+  const size = textFontSize(a);
+  const lines = String(a.text || "").split("\n");
+  let w = 0;
+  for (const ln of lines) w = Math.max(w, g.measureText(ln || " ").width);
+  return { w: w + 4, h: lines.length * size * 1.2, lines: lines, size: size };
+}
+
+function drawArrow(g, a) {
+  const dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.5) return;
+  const ux = dx / len, uy = dy / len;
+  const head = Math.min(len, a.width * 4.6);
+  const halfW = a.width * 2.1;
+  // Stop the shaft short of the head so the tip stays sharp instead of the
+  // round line cap poking through it.
+  const sx = a.x2 - ux * head * 0.92, sy = a.y2 - uy * head * 0.92;
+
+  g.beginPath();
+  g.moveTo(a.x1, a.y1);
+  g.lineTo(sx, sy);
+  g.lineWidth = a.width;
+  g.stroke();
+
+  const bx = a.x2 - ux * head, by = a.y2 - uy * head;
+  g.beginPath();
+  g.moveTo(a.x2, a.y2);
+  g.lineTo(bx - uy * halfW, by + ux * halfW);
+  g.lineTo(bx + uy * halfW, by - ux * halfW);
+  g.closePath();
+  g.fill();
+}
+
+function drawAnnotation(g, a) {
+  if (a.type === "redact") return;               // handled before this layer
+  g.save();
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  g.strokeStyle = a.color;
+  g.fillStyle = a.color;
+  g.lineWidth = a.width;
+
+  const b = annoBounds(a);
+
+  if (a.type === "rect") {
+    roundRectPath(g, b.x, b.y, b.w, b.h, Math.min(a.width * 1.5, Math.min(b.w, b.h) / 2));
+    g.stroke();
+
+  } else if (a.type === "ellipse") {
+    g.beginPath();
+    g.ellipse(b.x + b.w / 2, b.y + b.h / 2, Math.max(b.w / 2, .5), Math.max(b.h / 2, .5), 0, 0, Math.PI * 2);
+    g.stroke();
+
+  } else if (a.type === "arrow") {
+    drawArrow(g, a);
+
+  } else if (a.type === "highlight") {
+    // Multiply keeps the underlying text legible through the marker.
+    g.globalCompositeOperation = "multiply";
+    g.globalAlpha = 0.38;
+    g.fillRect(b.x, b.y, b.w, b.h);
+
+  } else if (a.type === "text") {
+    const m = measureAnnoText(a);
+    g.font = annoFont(a);
+    g.textBaseline = "top";
+    m.lines.forEach((ln, i) => g.fillText(ln, a.x + 2, a.y + i * m.size * 1.2));
+
+  } else if (a.type === "step") {
+    const r = stepRadius(a);
+    g.beginPath();
+    g.arc(a.x, a.y, r, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#fff";
+    g.font = "700 " + Math.round(r * 1.15) + "px " + ANNO_FONT;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(String(a.n), a.x, a.y + r * 0.06);
+  }
+  g.restore();
+}
+
+/** Pixelate redacted regions by sampling the composited canvas down to a
+ *  cols×rows scratch and drawing it back with smoothing off.
+ *
+ *  Block counts are derived from the region's SOURCE-pixel size, so they are
+ *  identical at 1× and 2× — only the blocks get bigger. Redaction is therefore
+ *  scale-invariant by construction, like the shadow sprite.
+ *
+ *  Pixelation rather than blur: blur is sometimes reversible, and ctx.filter
+ *  is not safe to assume in Safari. */
+let redactScratch = null;
+function applyRedactions(ctx, L, scale) {
+  const list = doc.annotations;
+  for (const a of list) {
+    if (a.type !== "redact") continue;
+    const b = annoBounds(a);
+    if (b.w < 1 || b.h < 1) continue;
+    const p = srcToComp(L, b.x, b.y);
+    const dx = Math.round(p.x * scale), dy = Math.round(p.y * scale);
+    const dw = Math.max(1, Math.round(b.w * scale)), dh = Math.max(1, Math.round(b.h * scale));
+
+    const block = Math.max(4, a.block || 14);
+    const cols = Math.max(1, Math.round(b.w / block));
+    const rows = Math.max(1, Math.round(b.h / block));
+
+    redactScratch = redactScratch || document.createElement("canvas");
+    redactScratch.width = cols; redactScratch.height = rows;
+    const sg = redactScratch.getContext("2d");
+    sg.imageSmoothingEnabled = true;
+    sg.imageSmoothingQuality = "high";
+    sg.clearRect(0, 0, cols, rows);
+    sg.drawImage(ctx.canvas, dx, dy, dw, dh, 0, 0, cols, rows);
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(redactScratch, 0, 0, cols, rows, dx, dy, dw, dh);
+    ctx.restore();
+  }
+}
+
+/* ============================================================================
    6. the one renderer
    ========================================================================== */
 
@@ -960,6 +1251,19 @@ function render(ctx, scale) {
   ctx.restore();
 
   ctx.drawImage(card, x, y);
+
+  // 5 — redaction, sampled back off the composited canvas
+  applyRedactions(ctx, L, scale);
+
+  // 6 — annotations, in source-image space so they stay pinned to the image
+  if (doc.annotations.length) {
+    ctx.save();
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.translate(L.imgX - L.src.sx, L.imgY - L.src.sy);
+    for (const a of doc.annotations) drawAnnotation(ctx, a);
+    ctx.restore();
+  }
+
   ctx.restore();
   return { dw, dh, comp: L };
 }
@@ -970,9 +1274,14 @@ function render(ctx, scale) {
 
 const preview = $("#preview");
 const pctx = preview.getContext("2d");
+const overlay = $("#overlay");
+const octx = overlay.getContext("2d");
 const canvasArea = $(".canvas-area");
 const canvasShell = $("#canvasShell");
 const sizeInfo = $("#sizeInfo");
+
+/* Current view transform, needed to map pointer events back to source pixels. */
+const view = { fit: 1, dpr: 1, L: null };
 
 let frame = 0;
 function invalidate() {
@@ -1006,7 +1315,14 @@ function drawPreview() {
   preview.style.width = cssW + "px";
   preview.style.height = cssH + "px";
 
+  if (overlay.width !== dw || overlay.height !== dh) { overlay.width = dw; overlay.height = dh; }
+  overlay.style.width = cssW + "px";
+  overlay.style.height = cssH + "px";
+
+  view.fit = fit; view.dpr = dpr; view.L = L;
+
   render(pctx, scale);
+  drawOverlay();
 
   const m = exportMultiplier(L, state.scale);
   const outW = Math.round(L.compW * m), outH = Math.round(L.compH * m);
@@ -1031,6 +1347,629 @@ else window.addEventListener("resize", invalidate);
   const onChange = () => { invalidate(); attach(); };
   attach();
 })();
+
+/* ============================================================================
+   7b. tools — crop, annotation, redaction
+   ========================================================================== */
+
+const TOOLS = [
+  { id: "select",    key: "v", label: "Select",      icon: "M4 3l14 8-6 1.6L9.6 19z" },
+  { id: "crop",      key: "c", label: "Crop",        icon: "M7 2v15h15M2 7h15v15" },
+  { id: "arrow",     key: "a", label: "Arrow",       icon: "M5 19L19 5M19 5h-8M19 5v8" },
+  { id: "rect",      key: "r", label: "Rectangle",   icon: "M3.5 5.5h17v13h-17z" },
+  { id: "ellipse",   key: "o", label: "Ellipse",     icon: "M12 5c4.7 0 8.5 3.1 8.5 7s-3.8 7-8.5 7-8.5-3.1-8.5-7S7.3 5 12 5z" },
+  { id: "highlight", key: "h", label: "Highlight",   icon: "M4 20h16M6.5 16l9.5-9.5 2.5 2.5L9 18.5H6.5z" },
+  { id: "text",      key: "t", label: "Text",        icon: "M5 6V4h14v2M12 4.5v15M9 19.5h6" },
+  { id: "step",      key: "s", label: "Step number", icon: "M12 3.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17zM10.6 9.6L12.4 8.4v7.4" },
+  { id: "redact",    key: "b", label: "Redact",      icon: "M3.5 5.5h7v6h-7zM13.5 5.5h7v6h-7zM3.5 13.5h7v6h-7zM13.5 13.5h7v6h-7z" }
+];
+
+let tool = "select";
+let annoSeq = 0;
+let cropDraft = null;      // pending crop rect, in source px
+let drag = null;           // in-flight pointer gesture
+
+const RECTISH = { rect: 1, ellipse: 1, highlight: 1, redact: 1 };
+const isRectish = t => !!RECTISH[t];
+
+/* ---- history ------------------------------------------------------------- */
+const history = { past: [], future: [] };
+const snapshot = () => JSON.stringify({ crop: doc.crop, annotations: doc.annotations });
+
+function pushHistory() {
+  history.past.push(snapshot());
+  if (history.past.length > 80) history.past.shift();
+  history.future.length = 0;
+  syncToolbar();
+}
+function applySnapshot(s) {
+  const o = JSON.parse(s);
+  doc.crop = o.crop;
+  doc.annotations = o.annotations;
+  doc.selected = null;
+  cardCache.key = "";
+  closeTextEditor(true);
+  invalidate();
+  syncToolbar();
+}
+function undo() {
+  if (!history.past.length) return;
+  history.future.push(snapshot());
+  applySnapshot(history.past.pop());
+}
+function redo() {
+  if (!history.future.length) return;
+  history.past.push(snapshot());
+  applySnapshot(history.future.pop());
+}
+
+/* ---- coordinate mapping -------------------------------------------------- */
+function eventToSrc(ev) {
+  const L = view.L || layout();
+  const r = preview.getBoundingClientRect();
+  const compX = (ev.clientX - r.left) / view.fit;
+  const compY = (ev.clientY - r.top) / view.fit;
+  return { x: compX - L.imgX + L.src.sx, y: compY - L.imgY + L.src.sy };
+}
+function srcToCss(x, y) {
+  const L = view.L || layout();
+  const p = srcToComp(L, x, y);
+  return { x: p.x * view.fit, y: p.y * view.fit };
+}
+const norm = r => ({
+  x: Math.min(r.x, r.x + r.w), y: Math.min(r.y, r.y + r.h),
+  w: Math.abs(r.w), h: Math.abs(r.h)
+});
+
+/* ---- selection ----------------------------------------------------------- */
+const findAnno = id => doc.annotations.find(a => a.id === id) || null;
+const selectedAnno = () => (doc.selected == null ? null : findAnno(doc.selected));
+
+function hitTest(p) {
+  // Topmost first, so the most recently drawn shape wins.
+  for (let i = doc.annotations.length - 1; i >= 0; i--) {
+    const a = doc.annotations[i];
+    const tol = Math.max(6 / view.fit, a.width || 4);
+    if (a.type === "arrow") {
+      if (distToSegment(p, a) <= tol + 4) return a;
+      continue;
+    }
+    const b = annoBounds(a);
+    if (p.x >= b.x - tol && p.x <= b.x + b.w + tol && p.y >= b.y - tol && p.y <= b.y + b.h + tol) return a;
+  }
+  return null;
+}
+function distToSegment(p, a) {
+  const dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+  const l2 = dx * dx + dy * dy;
+  if (!l2) return Math.hypot(p.x - a.x1, p.y - a.y1);
+  let t = ((p.x - a.x1) * dx + (p.y - a.y1) * dy) / l2;
+  t = clamp(t, 0, 1);
+  return Math.hypot(p.x - (a.x1 + t * dx), p.y - (a.y1 + t * dy));
+}
+
+/** Handle positions for a shape, in source px. */
+function handlesFor(a) {
+  if (a.type === "arrow") return [{ id: "p1", x: a.x1, y: a.y1 }, { id: "p2", x: a.x2, y: a.y2 }];
+  if (a.type === "text" || a.type === "step") return [];
+  const b = annoBounds(a);
+  return [
+    { id: "nw", x: b.x,       y: b.y },
+    { id: "ne", x: b.x + b.w, y: b.y },
+    { id: "se", x: b.x + b.w, y: b.y + b.h },
+    { id: "sw", x: b.x,       y: b.y + b.h }
+  ];
+}
+function cropHandles(r) {
+  const h = [];
+  for (const [id, fx, fy] of [["nw",0,0],["n",.5,0],["ne",1,0],["e",1,.5],["se",1,1],["s",.5,1],["sw",0,1],["w",0,.5]]) {
+    h.push({ id: id, x: r.x + r.w * fx, y: r.y + r.h * fy });
+  }
+  return h;
+}
+function hitHandle(list, p) {
+  const tol = 9 / view.fit;
+  for (const h of list) if (Math.abs(p.x - h.x) <= tol && Math.abs(p.y - h.y) <= tol) return h;
+  return null;
+}
+
+/* ---- overlay ------------------------------------------------------------- */
+function drawOverlay() {
+  const dpr = view.dpr;
+  octx.setTransform(1, 0, 0, 1, 0, 0);
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);   // work in CSS px so chrome is a constant screen size
+
+  if (tool === "crop" && cropDraft) { drawCropOverlay(); return; }
+
+  const a = selectedAnno();
+  if (!a) return;
+  const b = annoBounds(a);
+  const p0 = srcToCss(b.x, b.y), p1 = srcToCss(b.x + b.w, b.y + b.h);
+
+  octx.strokeStyle = "rgba(109,140,255,.95)";
+  octx.lineWidth = 1;
+  octx.setLineDash([4, 3]);
+  octx.strokeRect(p0.x - 2, p0.y - 2, (p1.x - p0.x) + 4, (p1.y - p0.y) + 4);
+  octx.setLineDash([]);
+
+  for (const h of handlesFor(a)) {
+    const c = srcToCss(h.x, h.y);
+    handleDot(c.x, c.y);
+  }
+}
+function handleDot(x, y) {
+  octx.beginPath();
+  octx.arc(x, y, 4.5, 0, Math.PI * 2);
+  octx.fillStyle = "#fff";
+  octx.fill();
+  octx.lineWidth = 1.5;
+  octx.strokeStyle = "rgba(109,140,255,1)";
+  octx.stroke();
+}
+function drawCropOverlay() {
+  const r = norm(cropDraft);
+  const a = srcToCss(r.x, r.y), b = srcToCss(r.x + r.w, r.y + r.h);
+  const w = overlay.width / view.dpr, h = overlay.height / view.dpr;
+
+  octx.fillStyle = "rgba(0,0,0,.5)";
+  octx.beginPath();
+  octx.rect(0, 0, w, h);
+  octx.rect(a.x, a.y, b.x - a.x, b.y - a.y);
+  octx.fill("evenodd");
+
+  octx.strokeStyle = "rgba(255,255,255,.95)";
+  octx.lineWidth = 1;
+  octx.strokeRect(a.x + .5, a.y + .5, b.x - a.x - 1, b.y - a.y - 1);
+
+  // rule-of-thirds guides
+  octx.strokeStyle = "rgba(255,255,255,.28)";
+  octx.beginPath();
+  for (let i = 1; i < 3; i++) {
+    const gx = a.x + (b.x - a.x) * i / 3, gy = a.y + (b.y - a.y) * i / 3;
+    octx.moveTo(gx, a.y); octx.lineTo(gx, b.y);
+    octx.moveTo(a.x, gy); octx.lineTo(b.x, gy);
+  }
+  octx.stroke();
+
+  for (const hd of cropHandles(r)) {
+    const c = srcToCss(hd.x, hd.y);
+    handleDot(c.x, c.y);
+  }
+  const dims = $("#cropDims");
+  if (dims) dims.textContent = Math.round(r.w) + " × " + Math.round(r.h);
+}
+
+/* ---- pointer gestures ---------------------------------------------------- */
+overlay.addEventListener("pointerdown", ev => {
+  if (ev.button !== 0) return;
+  overlay.setPointerCapture(ev.pointerId);
+  const p = eventToSrc(ev);
+  closeTextEditor();
+
+  if (tool === "crop") return cropPointerDown(p);
+  if (tool === "select") return selectPointerDown(p);
+  if (tool === "text") return placeText(p);
+  if (tool === "step") return placeStep(p);
+
+  // drawing tools: create the shape now and mutate it live, so the preview is
+  // the real renderer rather than a separate "in progress" code path.
+  pushHistory();
+  const base = { id: ++annoSeq, color: state.annoColor, width: state.annoWidth };
+  let a;
+  if (tool === "arrow") a = Object.assign(base, { type: "arrow", x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+  else a = Object.assign(base, { type: tool, x: p.x, y: p.y, w: 0, h: 0 });
+  if (tool === "redact") a.block = 14;
+  doc.annotations.push(a);
+  doc.selected = a.id;
+  drag = { kind: "create", a: a, start: p };
+  canvasShell.dataset.draw = "1";
+  invalidate();
+});
+
+overlay.addEventListener("pointermove", ev => {
+  if (!drag) return;
+  const p = eventToSrc(ev);
+  const shift = ev.shiftKey;
+
+  if (drag.kind === "create") {
+    const a = drag.a;
+    if (a.type === "arrow") {
+      a.x2 = p.x; a.y2 = p.y;
+      if (shift) {                                   // snap to 15°
+        const dx = a.x2 - a.x1, dy = a.y2 - a.y1;
+        const len = Math.hypot(dx, dy);
+        const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 12)) * (Math.PI / 12);
+        a.x2 = a.x1 + Math.cos(ang) * len; a.y2 = a.y1 + Math.sin(ang) * len;
+      }
+    } else {
+      a.w = p.x - drag.start.x;
+      a.h = p.y - drag.start.y;
+      if (shift) {                                   // square / circle
+        const s = Math.max(Math.abs(a.w), Math.abs(a.h));
+        a.w = Math.sign(a.w || 1) * s; a.h = Math.sign(a.h || 1) * s;
+      }
+    }
+    invalidate();
+
+  } else if (drag.kind === "move") {
+    const dx = p.x - drag.last.x, dy = p.y - drag.last.y;
+    moveAnno(drag.a, dx, dy);
+    drag.last = p;
+    invalidate();
+
+  } else if (drag.kind === "handle") {
+    resizeAnno(drag.a, drag.handle, p);
+    invalidate();
+
+  } else if (drag.kind === "crop-new") {
+    cropDraft = { x: drag.start.x, y: drag.start.y, w: p.x - drag.start.x, h: p.y - drag.start.y };
+    clampCropDraft();
+    drawOverlay();
+
+  } else if (drag.kind === "crop-move") {
+    cropDraft.x += p.x - drag.last.x;
+    cropDraft.y += p.y - drag.last.y;
+    drag.last = p;
+    clampCropDraft();
+    drawOverlay();
+
+  } else if (drag.kind === "crop-handle") {
+    resizeCrop(drag.handle, p);
+    drawOverlay();
+  }
+});
+
+overlay.addEventListener("pointerup", () => {
+  canvasShell.dataset.draw = "";
+  if (!drag) return;
+  if (drag.kind === "create") {
+    const a = drag.a;
+    const b = annoBounds(a);
+    // A click with no drag leaves a degenerate shape — drop it and undo the
+    // history entry so the stack doesn't fill with no-ops.
+    if (b.w < 3 && b.h < 3) {
+      doc.annotations = doc.annotations.filter(x => x !== a);
+      doc.selected = null;
+      history.past.pop();
+      invalidate();
+    }
+  }
+  drag = null;
+  syncToolbar();
+  drawOverlay();
+});
+overlay.addEventListener("pointercancel", () => { drag = null; canvasShell.dataset.draw = ""; });
+
+function selectPointerDown(p) {
+  const sel = selectedAnno();
+  if (sel) {
+    const h = hitHandle(handlesFor(sel), p);
+    if (h) { pushHistory(); drag = { kind: "handle", a: sel, handle: h.id }; return; }
+  }
+  const hit = hitTest(p);
+  doc.selected = hit ? hit.id : null;
+  if (hit) { pushHistory(); drag = { kind: "move", a: hit, last: p }; }
+  invalidate();
+  drawOverlay();
+  syncToolbar();
+}
+
+function moveAnno(a, dx, dy) {
+  if (a.type === "arrow") { a.x1 += dx; a.y1 += dy; a.x2 += dx; a.y2 += dy; }
+  else { a.x += dx; a.y += dy; }
+}
+function resizeAnno(a, handle, p) {
+  if (a.type === "arrow") {
+    if (handle === "p1") { a.x1 = p.x; a.y1 = p.y; } else { a.x2 = p.x; a.y2 = p.y; }
+    return;
+  }
+  const b = annoBounds(a);
+  let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+  if (handle.indexOf("w") >= 0) x0 = p.x;
+  if (handle.indexOf("e") >= 0) x1 = p.x;
+  if (handle.indexOf("n") >= 0) y0 = p.y;
+  if (handle.indexOf("s") >= 0) y1 = p.y;
+  a.x = x0; a.y = y0; a.w = x1 - x0; a.h = y1 - y0;
+}
+
+/* ---- crop ---------------------------------------------------------------- */
+function clampCropDraft() {
+  const S = srcRect();
+  const r = norm(cropDraft);
+  r.x = clamp(r.x, 0, S.fullW - 1);
+  r.y = clamp(r.y, 0, S.fullH - 1);
+  r.w = clamp(r.w, 1, S.fullW - r.x);
+  r.h = clamp(r.h, 1, S.fullH - r.y);
+  cropDraft = r;
+}
+function cropPointerDown(p) {
+  if (cropDraft) {
+    const h = hitHandle(cropHandles(norm(cropDraft)), p);
+    if (h) { drag = { kind: "crop-handle", handle: h.id }; return; }
+    const r = norm(cropDraft);
+    if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) {
+      drag = { kind: "crop-move", last: p };
+      return;
+    }
+  }
+  drag = { kind: "crop-new", start: p };
+  cropDraft = { x: p.x, y: p.y, w: 0, h: 0 };
+  drawOverlay();
+}
+function resizeCrop(handle, p) {
+  const r = norm(cropDraft);
+  let x0 = r.x, y0 = r.y, x1 = r.x + r.w, y1 = r.y + r.h;
+  if (handle.indexOf("w") >= 0) x0 = p.x;
+  if (handle.indexOf("e") >= 0) x1 = p.x;
+  if (handle.indexOf("n") >= 0) y0 = p.y;
+  if (handle.indexOf("s") >= 0) y1 = p.y;
+  cropDraft = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  clampCropDraft();
+}
+function enterCrop() {
+  const S = srcRect();
+  cropDraft = doc.crop
+    ? { x: doc.crop.x, y: doc.crop.y, w: doc.crop.w, h: doc.crop.h }
+    : { x: 0, y: 0, w: S.fullW, h: S.fullH };
+  document.body.classList.add("cropping");
+  drawOverlay();
+}
+function exitCrop() {
+  cropDraft = null;
+  document.body.classList.remove("cropping");
+  drawOverlay();
+}
+function applyCrop() {
+  if (!cropDraft) return;
+  const r = norm(cropDraft);
+  if (r.w < 8 || r.h < 8) { toast("That crop is too small.", "err"); return; }
+  pushHistory();
+  const S = srcRect();
+  doc.crop = (r.w >= S.fullW && r.h >= S.fullH) ? null : r;
+  cardCache.key = "";
+  setTool("select");
+  invalidate();
+  toast(doc.crop ? "Cropped to " + Math.round(r.w) + " × " + Math.round(r.h) : "Crop cleared", "ok");
+}
+function resetCrop() {
+  if (doc.crop) pushHistory();
+  doc.crop = null;
+  cardCache.key = "";
+  const S = srcRect();
+  cropDraft = { x: 0, y: 0, w: S.fullW, h: S.fullH };
+  invalidate();
+}
+$("#cropApply").addEventListener("click", applyCrop);
+$("#cropCancel").addEventListener("click", () => setTool("select"));
+$("#cropReset").addEventListener("click", resetCrop);
+
+/* ---- text ---------------------------------------------------------------- */
+const textEditor = $("#textEditor");
+let editing = null;
+
+function placeText(p) {
+  pushHistory();
+  const a = {
+    id: ++annoSeq, type: "text", x: p.x, y: p.y,
+    text: "", color: state.annoColor, width: state.annoWidth,
+    size: Math.max(14, state.annoWidth * 5)
+  };
+  doc.annotations.push(a);
+  doc.selected = a.id;
+  openTextEditor(a, true);
+}
+function openTextEditor(a, isNew) {
+  editing = { a: a, isNew: !!isNew };
+  const c = srcToCss(a.x, a.y);
+  textEditor.hidden = false;
+  textEditor.textContent = a.text || "";
+  textEditor.style.left = c.x + "px";
+  textEditor.style.top = c.y + "px";
+  textEditor.style.color = a.color;
+  textEditor.style.fontSize = (textFontSize(a) * view.fit) + "px";
+  textEditor.style.minWidth = "1.2em";
+  // The live annotation renders from `a.text`; keep it empty while editing so
+  // the text isn't drawn twice, once by the canvas and once by the editor.
+  a.text = "";
+  invalidate();
+  setTimeout(() => {
+    textEditor.focus();
+    const r = document.createRange();
+    r.selectNodeContents(textEditor);
+    r.collapse(false);
+    const s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+  }, 0);
+}
+function closeTextEditor(discard) {
+  if (!editing) return;
+  const a = editing.a;
+  const val = discard ? "" : textEditor.textContent.replace(/ /g, " ");
+  editing = null;
+  textEditor.hidden = true;
+  textEditor.textContent = "";
+  if (!val.trim()) {
+    doc.annotations = doc.annotations.filter(x => x !== a);
+    if (doc.selected === a.id) doc.selected = null;
+    if (history.past.length) history.past.pop();
+  } else {
+    a.text = val;
+  }
+  invalidate();
+  drawOverlay();
+}
+textEditor.addEventListener("keydown", ev => {
+  ev.stopPropagation();                       // tool shortcuts must not fire while typing
+  if (ev.key === "Escape") { ev.preventDefault(); closeTextEditor(true); }
+  else if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); closeTextEditor(); }
+});
+textEditor.addEventListener("blur", () => closeTextEditor());
+
+/* ---- step badges --------------------------------------------------------- */
+function placeStep(p) {
+  pushHistory();
+  const n = doc.annotations.filter(a => a.type === "step").length + 1;
+  doc.annotations.push({
+    id: ++annoSeq, type: "step", x: p.x, y: p.y, n: n,
+    color: state.annoColor, width: state.annoWidth
+  });
+  invalidate();
+}
+
+/* ---- tool selection ------------------------------------------------------ */
+function setTool(id) {
+  if (tool === "crop" && id !== "crop") exitCrop();
+  closeTextEditor();
+  tool = id;
+  if (id !== "select") doc.selected = null;
+  canvasShell.dataset.tool = id;
+  if (id === "crop") enterCrop();
+  syncToolbar();
+  invalidate();
+  drawOverlay();
+}
+
+function deleteSelected() {
+  const a = selectedAnno();
+  if (!a) return;
+  pushHistory();
+  doc.annotations = doc.annotations.filter(x => x !== a);
+  doc.selected = null;
+  // Keep step numbering contiguous after a deletion.
+  let n = 0;
+  for (const x of doc.annotations) if (x.type === "step") x.n = ++n;
+  invalidate();
+  drawOverlay();
+  syncToolbar();
+}
+function clearAnnotations() {
+  if (!doc.annotations.length && !doc.crop) return;
+  pushHistory();
+  doc.annotations = [];
+  doc.selected = null;
+  doc.crop = null;
+  cardCache.key = "";
+  invalidate();
+  drawOverlay();
+  toast("Cleared crop and annotations", "ok");
+}
+
+/* ---- toolbar ------------------------------------------------------------- */
+const toolbar = $("#toolbar");
+
+function svgIcon(d) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+         'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + d + '"/></svg>';
+}
+
+function buildToolbar() {
+  TOOLS.forEach((t, i) => {
+    if (t.id === "arrow") toolbar.appendChild(sep());
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tool";
+    b.dataset.tool = t.id;
+    b.innerHTML = svgIcon(t.icon);
+    b.title = t.label + "  (" + t.key.toUpperCase() + ")";
+    b.setAttribute("aria-label", t.label);
+    b.addEventListener("click", () => setTool(t.id));
+    toolbar.appendChild(b);
+  });
+
+  toolbar.appendChild(sep());
+
+  const colour = document.createElement("label");
+  colour.className = "tool-color";
+  colour.title = "Annotation colour";
+  colour.innerHTML = '<i></i><input type="color" aria-label="Annotation colour">';
+  const ci = colour.querySelector("input");
+  ci.value = state.annoColor.toLowerCase();
+  ci.addEventListener("input", () => {
+    const hex = normHex(ci.value);
+    if (!hex) return;
+    state.annoColor = hex;
+    const sel = selectedAnno();
+    if (sel) { sel.color = hex; invalidate(); }
+    saveSettings();
+    syncToolbar();
+  });
+  toolbar.appendChild(colour);
+
+  const widths = document.createElement("div");
+  widths.className = "tool-width";
+  STROKE_WIDTHS.forEach(w => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.width = String(w);
+    b.title = "Stroke " + w;
+    b.setAttribute("aria-label", "Stroke width " + w);
+    b.innerHTML = '<i style="height:' + Math.max(2, Math.round(w * .9)) + 'px"></i>';
+    b.addEventListener("click", () => {
+      state.annoWidth = w;
+      const sel = selectedAnno();
+      if (sel) { sel.width = w; if (sel.type === "text") sel.size = Math.max(14, w * 5); invalidate(); }
+      saveSettings();
+      syncToolbar();
+    });
+    widths.appendChild(b);
+  });
+  toolbar.appendChild(widths);
+
+  toolbar.appendChild(sep());
+  toolbar.appendChild(iconBtn("undo", "Undo  (⌘Z)", "M9 14l-4-4 4-4M5 10h8a6 6 0 010 12h-3", undo));
+  toolbar.appendChild(iconBtn("redo", "Redo  (⇧⌘Z)", "M15 14l4-4-4-4M19 10h-8a6 6 0 000 12h3", redo));
+  toolbar.appendChild(iconBtn("clear", "Delete all annotations", "M6 7h12M10 7V5h4v2M8 7l1 13h6l1-13", clearAnnotations));
+}
+function sep() { const s = document.createElement("span"); s.className = "tool-sep"; return s; }
+function iconBtn(name, title, d, fn) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "tool";
+  b.dataset.action = name;
+  b.title = title;
+  b.setAttribute("aria-label", title);
+  b.innerHTML = svgIcon(d);
+  b.addEventListener("click", fn);
+  return b;
+}
+
+function syncToolbar() {
+  toolbar.querySelectorAll("[data-tool]").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.tool === tool)));
+  toolbar.querySelectorAll("[data-width]").forEach(b =>
+    b.setAttribute("aria-pressed", String(parseInt(b.dataset.width, 10) === state.annoWidth)));
+  const ci = toolbar.querySelector(".tool-color input");
+  if (ci && document.activeElement !== ci) ci.value = state.annoColor.toLowerCase();
+  toolbar.style.setProperty("--anno-color", state.annoColor);
+  const u = toolbar.querySelector('[data-action="undo"]');
+  const r = toolbar.querySelector('[data-action="redo"]');
+  if (u) u.disabled = !history.past.length;
+  if (r) r.disabled = !history.future.length;
+  if (u) u.style.opacity = history.past.length ? "" : ".4";
+  if (r) r.style.opacity = history.future.length ? "" : ".4";
+}
+
+/* ---- tool keyboard shortcuts --------------------------------------------- */
+document.addEventListener("keydown", ev => {
+  if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  const el = document.activeElement;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+
+  const k = (ev.key || "").toLowerCase();
+
+  if (ev.key === "Escape") {
+    if (tool === "crop") { setTool("select"); return; }
+    if (doc.selected != null) { doc.selected = null; invalidate(); drawOverlay(); return; }
+  }
+  if (ev.key === "Enter" && tool === "crop") { ev.preventDefault(); applyCrop(); return; }
+  if (ev.key === "Backspace" || ev.key === "Delete") {
+    if (doc.selected != null) { ev.preventDefault(); deleteSelected(); }
+    return;
+  }
+  const t = TOOLS.find(x => x.key === k);
+  if (t) { ev.preventDefault(); setTool(t.id); }
+});
 
 /* ============================================================================
    8. export + clipboard
@@ -1226,6 +2165,18 @@ function setImage(bitmap, demo) {
   cardCache.key = "";
   isDemo = !!demo;
   $("#demoBadge").hidden = !isDemo;
+
+  // Crop and annotations describe *this* image; a new one starts clean, and
+  // the history stack goes with it so undo can't resurrect marks belonging to
+  // a picture that is no longer loaded.
+  doc.crop = null;
+  doc.annotations = [];
+  doc.selected = null;
+  history.past.length = 0;
+  history.future.length = 0;
+  if (typeof closeTextEditor === "function") closeTextEditor(true);
+  if (tool === "crop") setTool("select"); else syncToolbar();
+
   invalidate();
 }
 
@@ -1476,6 +2427,10 @@ document.addEventListener("keydown", e => {
   } else if (k === "o") {
     e.preventDefault();
     openPicker();
+  } else if (k === "z") {
+    if (typing) return;
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
   }
 });
 
@@ -1496,6 +2451,7 @@ function syncUI() {
     b.setAttribute("aria-pressed", String(parseInt(b.dataset.scale, 10) === state.scale)));
 
   SLIDERS.forEach(s => { s.el.value = state[s.key]; syncSlider(s); });
+  syncToolbar();
 }
 
 /* ============================================================================
@@ -1599,6 +2555,7 @@ function makeDemoImage() {
 
 loadSettings();
 buildSwatches();
+buildToolbar();
 syncUI();
 setImage(makeDemoImage(), true);
 
@@ -1617,7 +2574,11 @@ window.__myshot = {
   state, layout, render, renderExport, exportMultiplier, debugOpts,
   setImage, makeDemoImage, BACKGROUNDS, RATIOS, DEFAULTS,
   get image() { return image; },
-  invalidate, syncUI
+  invalidate, syncUI,
+  doc, srcRect, setTool, get tool() { return tool; },
+  undo, redo, history, applyCrop, resetCrop, deleteSelected, clearAnnotations,
+  get cropDraft() { return cropDraft; }, set cropDraft(v) { cropDraft = v; },
+  annoBounds, hitTest, drawOverlay, TOOLS
 };
 
 })();

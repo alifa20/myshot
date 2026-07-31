@@ -184,6 +184,52 @@ resolution* at 1× and 2×, so parity is preserved by construction rather than b
 Result: **4 fps → 120 fps** (the display's refresh cap), on every slider, for every image size
 from the 1440×900 demo up to a 5120×2880 capture. Worst frame ≈ 11 ms.
 
+## 7b. Crop, annotation and redaction
+
+Added after the first pass. The governing constraint: **do not introduce a second renderer.**
+Everything new has to ride the existing `render(ctx, scale)` so that parity, the 2× export and
+the verification suite keep working unchanged.
+
+### Coordinate space
+
+Annotations are stored in **source-image pixels** — not canvas pixels and not card-relative.
+Drawn via `translate(imgX − cropX, imgY − cropY)`, they stay locked to the image features they
+point at when padding, ratio or even the crop changes. Storing them in composition space would
+make every annotation drift the moment the padding slider moved.
+
+Because they are drawn under `ctx.scale(scale)`, stroke widths and font sizes scale with the
+export for free — an arrow is pixel-correct at 2× with no extra code, and the existing
+scale-invariance test covers the new layer automatically.
+
+### Crop is non-destructive
+
+`doc.crop` is a rect in source pixels. `buildCard()`'s single `drawImage(image, 0,0,w,h)`
+becomes the 9-argument form, and `layout()` uses the cropped dimensions. Nothing is thrown
+away, so the crop stays adjustable and resettable. The card cache key gains the crop.
+
+### Overlays never leak into the export
+
+Crop handles, selection handles and in-progress shapes are drawn on a **separate transparent
+canvas stacked above the preview**, never in `render()`. Export cannot include chrome because
+export never calls the overlay path. This is also why overlays aren't DOM elements: one
+coordinate system, arbitrary shapes, no DOM sync.
+
+### Redaction is pixelation, and it is scale-invariant
+
+Blur is the wrong primitive for redaction — it is sometimes reversible, and `ctx.filter` is
+not safe to assume in Safari. Pixelation is neither. The mosaic grid is computed from the
+**source-pixel** size of the region, so the block count is identical at 1× and 2×; only the
+blocks get bigger. Redaction therefore preserves parity by construction, like the shadow sprite.
+
+It is applied after the card and before the annotation layer, by sampling the already-composited
+canvas down to a `cols × rows` scratch and drawing it back with smoothing off.
+
+### What is and isn't persisted
+
+Tool colour and stroke width persist. Crop and annotations do **not** — they belong to an image,
+and the image itself has never persisted. They live in `doc`, deliberately a separate object
+from `state`, so nothing image-scoped can leak into `localStorage` by accident.
+
 ## 8. Verification
 
 A debug handle (`window.__myshot`) exposes state, the renderer and a `debugOpts.grain` switch —
@@ -223,3 +269,31 @@ scale-invariant, so it is turned off to compare renders. Run against the real pa
 11. **Clipboard failure path.** With `clipboard.write` stubbed to reject, Copy surfaces an error
     toast *and* opens the sheet holding the true 1622×1082 PNG as a draggable `<img>`. It never
     fails silently.
+
+### Crop, annotation and redaction
+
+12. **Every tool draws** from synthesised pointer gestures: arrow, rectangle, ellipse,
+    highlight, redact and step all produce shapes. A click with no drag leaves nothing behind
+    and pops its own history entry, so the undo stack doesn't fill with no-ops. ⇧ constrains a
+    rectangle to a square (154×154) and an arrow to 15°.
+13. **Redaction genuinely pixelates.** Over per-pixel random noise, adjacent pixels inside a
+    redacted region are identical **93%** of the time versus **0%** on the untouched image.
+    (Measured over a *smooth* fixture the test is meaningless — the first attempt used an 8px
+    block pattern and could not distinguish pixelation from the source.)
+14. **Parity survives the new layers.** Measured per shape against a smooth-gradient fixture,
+    the no-annotation baseline is mean 0.208 / max 45.5; every shape leaves the mean unmoved
+    (0.209–0.218). Local maxima rise only for glyph and curve edges — `step` 109, `text` 57.5,
+    `ellipse` 54 — which is font rasterisation not being linear in size, not a scaling bug.
+    Rectangle, arrow, highlight and redact add **zero** divergence over baseline.
+15. **Crop is non-destructive and correct.** Cropping 1200×800 to 500×400 at (250,150) yields a
+    572×472 canvas and a 572×472 export while the underlying bitmap stays 1200×800. An
+    annotation on a landmark keeps its source coordinates and lands at the expected composition
+    position. Undo, redo and Reset all round-trip the layout exactly.
+16. **Document state is image-scoped.** Loading a new image clears crop, annotations *and* the
+    history stack, so undo cannot resurrect marks belonging to an image that is no longer
+    loaded. The persisted keys are exactly `annoColor, annoWidth, bg, custom, padding, radius,
+    ratio, scale, shadow` — crop and annotations never reach `localStorage`.
+17. **Performance holds.** With seven live annotations and a crop applied, dragging padding or
+    shadow still runs at the 120fps display cap, worst frame ≈ 11ms.
+18. **Overlays cannot leak.** Crop handles, thirds guides and selection chrome are drawn on a
+    separate canvas; the export path never calls `drawOverlay()`.

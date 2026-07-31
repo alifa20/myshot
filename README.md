@@ -1,10 +1,12 @@
 # MyShot
 
 A screenshot beautifier — padding, rounded corners, layered shadows and mesh-gradient
-backgrounds — in **one static HTML file**. No build step, no dependencies, no server, no
-uploads. Open it and it works, including offline.
+backgrounds, plus cropping, annotation and redaction — in **one static HTML file**. No build
+step, no dependencies, no server, no uploads. Open it and it works, including offline.
 
 ![A screenshot beautified with the default Aurora preset](docs/sample.png)
+
+![The same screenshot marked up with an arrow, box, highlight, text and step badges](docs/sample-annotated.png)
 
 ## Use it
 
@@ -26,6 +28,35 @@ Then drop, paste, or open a screenshot.
 
 Every control is live — there is nothing to apply. Double-click a slider to reset it. Your
 settings persist across reloads; your image does not.
+
+## Crop and annotate
+
+The tool strip sits under the canvas. Pick a tool, then drag once.
+
+| key | tool | |
+| --- | --- | --- |
+| <kbd>V</kbd> | Select | click a mark to move it, drag its handles to resize, <kbd>⌫</kbd> to delete |
+| <kbd>C</kbd> | Crop | drag a region, <kbd>⏎</kbd> to apply, <kbd>esc</kbd> to cancel |
+| <kbd>A</kbd> | Arrow | hold <kbd>⇧</kbd> to snap to 15° |
+| <kbd>R</kbd> | Rectangle | hold <kbd>⇧</kbd> for a square |
+| <kbd>O</kbd> | Ellipse | hold <kbd>⇧</kbd> for a circle |
+| <kbd>H</kbd> | Highlight | translucent marker, multiplied so text stays readable |
+| <kbd>T</kbd> | Text | click, type, <kbd>⏎</kbd> to commit (<kbd>⇧⏎</kbd> for a new line) |
+| <kbd>S</kbd> | Step | numbered badges, renumbered automatically when you delete one |
+| <kbd>B</kbd> | Redact | pixelates the region — for tokens, emails and names |
+
+<kbd>⌘Z</kbd> / <kbd>⇧⌘Z</kbd> undo and redo.
+
+**Cropping is non-destructive.** The full bitmap is kept, so you can re-crop or reset at any
+time, and annotations stay pinned to the image features they point at rather than drifting.
+
+**Redaction is pixelation, not blur.** Blur can sometimes be reversed; a mosaic cannot. The
+block grid is derived from the region's size in source pixels, so a 2× export has the same
+number of blocks — it can't leak detail that the preview didn't show.
+
+Crop and annotations belong to the loaded image and are cleared when you drop a new one. They
+are never written to `localStorage` — only your frame settings and the annotation colour and
+stroke width persist.
 
 ## Copy to clipboard and `file://`
 
