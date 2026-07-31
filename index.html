@@ -1,0 +1,1626 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MyShot</title>
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0e0f13" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f2f2f5" media="(prefers-color-scheme: light)">
+<meta name="description" content="Beautify screenshots — padding, corners, shadow and gradient backgrounds. Entirely client side.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%236366f1'/><stop offset='.55' stop-color='%23a855f7'/><stop offset='1' stop-color='%23f472b6'/></linearGradient></defs><rect width='64' height='64' rx='14' fill='url(%23g)'/><rect x='13' y='17.5' width='38' height='29' rx='5.5' fill='%23ffffff' opacity='.22'/><rect x='17' y='21.5' width='30' height='21' rx='3.5' fill='%23ffffff'/><circle cx='21.5' cy='25.5' r='1.5' fill='%23e5e7eb'/><circle cx='26' cy='25.5' r='1.5' fill='%23e5e7eb'/></svg>">
+<style>
+/* ============================================================
+   tokens
+   ============================================================ */
+:root{
+  --bg:#0c0d11;
+  --stage:#111319;
+  --panel:#15171d;
+  --panel-hi:#1c1f27;
+  --line:rgba(255,255,255,.09);
+  --line-strong:rgba(255,255,255,.16);
+  --text:#e9ebf0;
+  --text-dim:#9aa2b1;
+  --text-faint:#6c7482;
+  --accent:#6d8cff;
+  --accent-ink:#fff;
+  --danger:#ff6b6b;
+  --shadow-pop:0 24px 60px -12px rgba(0,0,0,.7), 0 2px 8px rgba(0,0,0,.5);
+  --radius:10px;
+  --track:rgba(255,255,255,.12);
+  --swatch-ring:rgba(255,255,255,.14);
+  --grid:rgba(255,255,255,.028);
+}
+@media (prefers-color-scheme:light){
+  :root{
+    --bg:#e9e9ee;
+    --stage:#dedee6;
+    --panel:#fbfbfd;
+    --panel-hi:#f1f1f5;
+    --line:rgba(0,0,0,.09);
+    --line-strong:rgba(0,0,0,.16);
+    --text:#14161b;
+    --text-dim:#5c6371;
+    --text-faint:#8b919c;
+    --accent:#3b5bfd;
+    --shadow-pop:0 24px 50px -16px rgba(0,0,0,.28), 0 2px 6px rgba(0,0,0,.10);
+    --track:rgba(0,0,0,.14);
+    --swatch-ring:rgba(0,0,0,.14);
+    --grid:rgba(0,0,0,.035);
+  }
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font:13px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+  overscroll-behavior:none;
+  -webkit-user-select:none; user-select:none;
+}
+button,input,select{font:inherit;color:inherit}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+::selection{background:color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* ============================================================
+   shell
+   ============================================================ */
+.app{height:100%;display:flex;flex-direction:column}
+
+.titlebar{
+  flex:0 0 auto;height:52px;display:flex;align-items:center;gap:12px;
+  padding:0 14px 0 16px;
+  border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--panel) 82%,transparent);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  backdrop-filter:saturate(180%) blur(20px);
+  position:relative;z-index:5;
+}
+.brand{display:flex;align-items:center;gap:9px;letter-spacing:-.01em}
+.brand .mark{width:22px;height:22px;border-radius:6px;display:block;box-shadow:0 1px 3px rgba(0,0,0,.35)}
+.brand b{font-weight:640;font-size:13.5px}
+.brand span{color:var(--text-faint);font-size:11.5px;padding-left:2px}
+.spacer{flex:1}
+
+/* ============================================================
+   controls kit
+   ============================================================ */
+.btn{
+  height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line-strong);
+  background:var(--panel-hi);color:var(--text);cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+  font-size:12.5px;font-weight:520;
+  transition:background .12s ease,border-color .12s ease,transform .06s ease;
+}
+.btn:hover{background:color-mix(in srgb,var(--panel-hi) 70%,var(--text) 8%)}
+.btn:active{transform:translateY(.5px)}
+.btn.primary{
+  background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 92%,#fff 8%),var(--accent));
+  border-color:color-mix(in srgb,var(--accent) 70%,#000 30%);
+  color:var(--accent-ink);
+  box-shadow:0 1px 2px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.18);
+}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--text-dim)}
+.btn.ghost:hover{background:var(--panel-hi);color:var(--text)}
+.btn svg{width:14px;height:14px;flex:0 0 auto}
+.btn kbd{
+  font:inherit;font-size:10.5px;color:color-mix(in srgb,currentColor 60%,transparent);
+  letter-spacing:.02em;padding-left:1px;
+}
+
+.seg{display:inline-flex;padding:2px;gap:2px;border-radius:9px;background:var(--panel-hi);border:1px solid var(--line)}
+.seg button{
+  height:24px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--text-dim);
+  cursor:pointer;font-size:12px;font-weight:540;transition:background .12s,color .12s;
+}
+.seg button:hover{color:var(--text)}
+.seg button[aria-pressed="true"]{
+  background:color-mix(in srgb,var(--text) 12%,transparent);color:var(--text);
+  box-shadow:0 1px 2px rgba(0,0,0,.18);
+}
+
+/* ============================================================
+   body / sidebar
+   ============================================================ */
+.body{flex:1;display:flex;min-height:0}
+
+.sidebar{
+  flex:0 0 268px;width:268px;display:flex;flex-direction:column;
+  border-right:1px solid var(--line);background:var(--panel);
+  overflow-y:auto;overscroll-behavior:contain;
+}
+.sidebar::-webkit-scrollbar{width:9px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--line-strong);border-radius:99px;border:3px solid transparent;background-clip:padding-box}
+
+.sect{padding:14px 16px;border-bottom:1px solid var(--line)}
+.sect:last-of-type{border-bottom:0}
+.sect h2{
+  margin:0 0 11px;font-size:10.5px;font-weight:640;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-faint);
+}
+
+.row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:5px}
+.row label{font-size:12.5px;color:var(--text-dim)}
+.row output{
+  font-size:11.5px;color:var(--text);font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum";
+}
+.field+.field{margin-top:14px}
+
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;
+  display:block;cursor:grab;margin:0;
+}
+input[type=range]:active{cursor:grabbing}
+input[type=range]::-webkit-slider-runnable-track{
+  height:4px;border-radius:99px;
+  background:linear-gradient(to right,var(--accent) var(--pct,50%),var(--track) var(--pct,50%));
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.45),0 0 0 .5px rgba(0,0,0,.2);
+  transition:transform .1s ease;
+}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.12)}
+input[type=range]::-moz-range-track{height:4px;border-radius:99px;background:var(--track)}
+input[type=range]::-moz-range-progress{height:4px;border-radius:99px;background:var(--accent)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.45)}
+
+/* swatches */
+/* 4 columns: 11 chips fill 4/4/3 instead of leaving the custom chip orphaned
+   alone on a third row, and each preview gets meaningfully bigger. */
+.swatches{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.sw{
+  position:relative;padding:0;border:0;background:none;cursor:pointer;border-radius:7px;
+  aspect-ratio:4/3;overflow:hidden;
+  box-shadow:0 0 0 1px var(--swatch-ring),0 1px 2px rgba(0,0,0,.25);
+  transition:transform .1s ease,box-shadow .12s ease;
+}
+.sw canvas{display:block;width:100%;height:100%}
+.sw:hover{transform:translateY(-1px)}
+.sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--accent),0 0 0 4px color-mix(in srgb,var(--accent) 25%,transparent)}
+.sw.custom{display:flex;align-items:center;justify-content:center;background:var(--sw-color,#3b82f6)}
+.sw.custom svg{width:13px;height:13px;color:#fff;mix-blend-mode:difference;opacity:.9}
+
+.custom-row{display:flex;gap:7px;margin-top:9px;align-items:center}
+.color-well{
+  position:relative;width:30px;height:28px;border-radius:7px;overflow:hidden;flex:0 0 auto;
+  box-shadow:0 0 0 1px var(--swatch-ring);cursor:pointer;
+}
+.color-well input{
+  position:absolute;inset:-6px;width:calc(100% + 12px);height:calc(100% + 12px);
+  padding:0;border:0;background:none;cursor:pointer;
+}
+.hex{
+  flex:1;min-width:0;height:28px;border-radius:7px;border:1px solid var(--line-strong);
+  background:var(--panel-hi);padding:0 9px;font-size:12px;letter-spacing:.02em;
+  text-transform:uppercase;font-variant-numeric:tabular-nums;
+  -webkit-user-select:text;user-select:text;
+}
+.hex:focus{border-color:var(--accent)}
+
+.pills{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pill{
+  height:27px;padding:0 8px;border-radius:8px;border:1px solid var(--line-strong);
+  background:var(--panel-hi);color:var(--text-dim);cursor:pointer;font-size:12px;font-weight:520;
+  transition:background .12s,color .12s,border-color .12s;
+}
+.pill:hover{color:var(--text)}
+.pill[aria-pressed="true"]{
+  background:color-mix(in srgb,var(--accent) 16%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 55%,transparent);
+  color:color-mix(in srgb,var(--accent) 55%,var(--text));
+}
+
+.side-foot{margin-top:auto;padding:14px 16px 16px;border-top:1px solid var(--line)}
+.hints{margin:12px 0 0;padding:0;list-style:none;font-size:11.5px;color:var(--text-faint);line-height:1.75}
+.hints kbd{
+  font:inherit;background:var(--panel-hi);border:1px solid var(--line);border-bottom-width:1.5px;
+  border-radius:4px;padding:0 4px;color:var(--text-dim);
+}
+.privacy{
+  display:flex;gap:6px;align-items:center;margin-top:12px;font-size:11px;color:var(--text-faint);
+}
+.privacy svg{width:12px;height:12px;flex:0 0 auto}
+
+/* ============================================================
+   stage
+   ============================================================ */
+.stage{
+  flex:1;min-width:0;position:relative;display:flex;flex-direction:column;
+  background:
+    radial-gradient(120% 90% at 50% 0%,color-mix(in srgb,var(--stage) 70%,var(--panel)) 0%,var(--stage) 60%),
+    var(--stage);
+}
+.stage::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:28px 28px;
+  -webkit-mask-image:radial-gradient(120% 90% at 50% 40%,#000 30%,transparent 78%);
+  mask-image:radial-gradient(120% 90% at 50% 40%,#000 30%,transparent 78%);
+}
+.canvas-area{
+  flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+  padding:32px;position:relative;
+}
+.canvas-shell{position:relative;line-height:0;transition:opacity .18s ease}
+#preview{
+  display:block;border-radius:3px;
+  box-shadow:var(--shadow-pop);
+  background:transparent;
+}
+.demo-badge{
+  position:absolute;top:10px;left:10px;z-index:2;
+  display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px 0 8px;
+  border-radius:99px;border:1px solid rgba(255,255,255,.22);
+  background:rgba(10,10,14,.55);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+  color:#fff;font-size:11px;font-weight:560;letter-spacing:.01em;cursor:pointer;
+  box-shadow:0 2px 10px rgba(0,0,0,.3);
+}
+.demo-badge svg{width:12px;height:12px}
+.demo-badge:hover{background:rgba(10,10,14,.72)}
+.demo-badge[hidden]{display:none}
+
+.stage-foot{
+  flex:0 0 auto;height:34px;display:flex;align-items:center;justify-content:center;gap:10px;
+  font-size:11.5px;color:var(--text-faint);font-variant-numeric:tabular-nums;
+  border-top:1px solid var(--line);
+  background:color-mix(in srgb,var(--panel) 40%,transparent);
+  position:relative;z-index:2;
+}
+.stage-foot .dot{opacity:.45}
+
+/* drop overlay */
+.dropzone{
+  position:absolute;inset:0;z-index:10;display:none;
+  align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--bg) 72%,transparent);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+body.dragging .dropzone{display:flex}
+.dropzone .inner{
+  display:flex;flex-direction:column;align-items:center;gap:12px;
+  padding:38px 54px;border-radius:18px;
+  border:2px dashed color-mix(in srgb,var(--accent) 60%,transparent);
+  background:color-mix(in srgb,var(--accent) 8%,transparent);
+  color:var(--text);font-size:15px;font-weight:560;
+}
+.dropzone svg{width:34px;height:34px;color:var(--accent)}
+.dropzone small{font-weight:420;color:var(--text-dim);font-size:12px}
+
+/* ============================================================
+   toasts + fallback sheet
+   ============================================================ */
+.toasts{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+  z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;
+}
+.toast{
+  display:flex;align-items:center;gap:8px;max-width:min(90vw,460px);
+  padding:9px 14px;border-radius:10px;
+  background:color-mix(in srgb,var(--panel) 92%,transparent);
+  border:1px solid var(--line-strong);
+  box-shadow:0 12px 32px -8px rgba(0,0,0,.55);
+  -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
+  font-size:12.5px;color:var(--text);
+  animation:toast-in .22s cubic-bezier(.2,.9,.3,1.3);
+}
+.toast.err{border-color:color-mix(in srgb,var(--danger) 55%,transparent)}
+.toast.err svg{color:var(--danger)}
+.toast.ok svg{color:#4ade80}
+.toast svg{width:14px;height:14px;flex:0 0 auto}
+.toast.out{animation:toast-out .2s ease forwards}
+@keyframes toast-in{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes toast-out{to{opacity:0;transform:translateY(6px) scale(.98)}}
+
+dialog#fallback{
+  border:1px solid var(--line-strong);border-radius:14px;padding:0;
+  background:var(--panel);color:var(--text);max-width:min(92vw,520px);width:520px;
+  box-shadow:0 40px 90px -20px rgba(0,0,0,.7);
+}
+dialog#fallback::backdrop{background:rgba(0,0,0,.45);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+.sheet-head{padding:16px 18px 12px}
+.sheet-head h3{margin:0 0 6px;font-size:14.5px;font-weight:620;letter-spacing:-.01em}
+.sheet-head p{margin:0;font-size:12.5px;color:var(--text-dim);line-height:1.55}
+.sheet-head code{
+  font:11.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--panel-hi);border:1px solid var(--line);border-radius:5px;padding:1px 4px;
+  -webkit-user-select:text;user-select:text;
+}
+.sheet-body{padding:4px 18px 16px}
+.sheet-body figure{
+  margin:0;padding:12px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel-hi);
+  display:flex;justify-content:center;
+}
+.sheet-body img{max-width:100%;max-height:38vh;border-radius:6px;display:block;
+  box-shadow:0 6px 20px -6px rgba(0,0,0,.5);-webkit-user-drag:auto}
+.sheet-foot{
+  display:flex;gap:8px;justify-content:flex-end;align-items:center;
+  padding:12px 18px;border-top:1px solid var(--line);background:var(--panel-hi);
+  border-radius:0 0 13px 13px;
+}
+.sheet-foot .note{margin-right:auto;font-size:11.5px;color:var(--text-faint)}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+@media (max-width:820px){
+  .sidebar{flex-basis:238px;width:238px}
+  .brand span{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="titlebar">
+    <div class="brand">
+      <canvas class="mark" id="brandMark" width="44" height="44" aria-hidden="true"></canvas>
+      <b>MyShot</b><span>Screenshot beautifier</span>
+    </div>
+    <div class="spacer"></div>
+
+    <div class="seg" role="group" aria-label="Export resolution" id="scaleSeg">
+      <button type="button" data-scale="1" aria-pressed="true" title="Export at the screenshot's native pixel size">1&times;</button>
+      <button type="button" data-scale="2" aria-pressed="false" title="Export at double size — smoother corners, shadow and gradient">2&times;</button>
+    </div>
+
+    <button class="btn" id="copyBtn" title="Copy the export to the clipboard (⌘C)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M6 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V6"/></svg>
+      Copy <kbd>⌘C</kbd>
+    </button>
+    <button class="btn primary" id="exportBtn" title="Download a PNG (⌘S)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path d="M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/></svg>
+      Export <kbd>⌘S</kbd>
+    </button>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <section class="sect">
+        <h2>Background</h2>
+        <div class="swatches" id="swatches" role="group" aria-label="Background preset"></div>
+        <div class="custom-row">
+          <span class="color-well" id="colorWell">
+            <input type="color" id="customColor" value="#3b82f6" aria-label="Custom background colour">
+          </span>
+          <input type="text" class="hex" id="hexInput" value="#3B82F6" spellcheck="false"
+                 autocomplete="off" aria-label="Custom background colour, hex value" maxlength="7">
+        </div>
+      </section>
+
+      <section class="sect">
+        <h2>Frame</h2>
+        <div class="field">
+          <!-- aria-live="off": <output> is an implicit live region, so without this
+               every slider tick is announced on top of the slider's own value. -->
+          <div class="row"><label for="padding">Padding</label><output id="paddingOut" for="padding" aria-live="off"></output></div>
+          <input type="range" id="padding" min="0" max="30" step="0.5" value="8">
+        </div>
+        <div class="field">
+          <div class="row"><label for="radius">Corner radius</label><output id="radiusOut" for="radius" aria-live="off"></output></div>
+          <input type="range" id="radius" min="0" max="100" step="1" value="24">
+        </div>
+        <div class="field">
+          <div class="row"><label for="shadow">Shadow</label><output id="shadowOut" for="shadow" aria-live="off"></output></div>
+          <input type="range" id="shadow" min="0" max="100" step="1" value="60">
+        </div>
+      </section>
+
+      <section class="sect">
+        <h2>Canvas ratio</h2>
+        <div class="pills" id="ratios" role="group" aria-label="Canvas ratio"></div>
+      </section>
+
+      <div class="side-foot">
+        <button class="btn" id="openBtn" style="width:100%;justify-content:center">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="m7.5 8.5 4.5-4.5 4.5 4.5"/><path d="M4 16v3.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V16"/></svg>
+          Open screenshot…
+        </button>
+        <ul class="hints">
+          <li>Drop a file anywhere, or paste with <kbd>⌘V</kbd></li>
+          <li><kbd>⌘C</kbd> copy &nbsp;·&nbsp; <kbd>⌘S</kbd> export &nbsp;·&nbsp; <kbd>⌘O</kbd> open</li>
+          <li><button class="btn ghost" id="resetBtn" style="height:22px;padding:0 6px;margin:2px 0 0 -6px;font-size:11.5px">Reset settings</button></li>
+        </ul>
+        <div class="privacy">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.5"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>
+          Runs entirely on this Mac — nothing is uploaded.
+        </div>
+      </div>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div class="canvas-area">
+        <div class="canvas-shell" id="canvasShell">
+          <canvas id="preview" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
+          <button class="demo-badge" id="demoBadge" title="Open a screenshot of your own">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5"/><path d="M12 8.2v.01"/></svg>
+            Demo image — drop or paste your own
+          </button>
+        </div>
+      </div>
+      <div class="stage-foot">
+        <span id="sizeInfo">—</span>
+      </div>
+      <div class="dropzone">
+        <div class="inner">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M3 16v3a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/></svg>
+          Drop to beautify
+          <small>PNG, JPEG, WebP, GIF — replaces the current image</small>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<dialog id="fallback" aria-labelledby="fallbackTitle">
+  <div class="sheet-head">
+    <h3 id="fallbackTitle">Copy to clipboard was blocked</h3>
+    <p id="fallbackWhy"></p>
+  </div>
+  <div class="sheet-body">
+    <figure><img id="fallbackImg" alt="Exported screenshot, ready to drag or right-click"></figure>
+  </div>
+  <div class="sheet-foot">
+    <span class="note">Drag the image out, or right-click &rsaquo; Copy Image.</span>
+    <button class="btn" id="fallbackClose">Close</button>
+    <button class="btn primary" id="fallbackDownload">Download PNG</button>
+  </div>
+</dialog>
+
+<input type="file" id="filePicker" accept="image/*" hidden>
+
+<script>
+"use strict";
+(function () {
+
+/* ============================================================================
+   0. constants
+   ========================================================================== */
+
+const STORE_KEY = "myshot:v1";
+
+/** Hard ceilings so a 2× export of a huge retina capture can't hand Safari a
+ *  canvas it will refuse to rasterise (returns blank / null blob). */
+const MAX_SIDE = 8192;
+const MAX_AREA = 48e6;
+
+const DEFAULTS = {
+  bg: "aurora",
+  custom: "#3B82F6",
+  padding: 8,     // % of sqrt(image area)
+  radius: 24,     // px in composition space
+  shadow: 60,     // 0–100, drives a curated two-layer shadow
+  ratio: "auto",
+  scale: 1        // export multiplier
+};
+
+const RATIOS = [
+  { id: "auto",    label: "Auto",    r: null },
+  { id: "16:9",    label: "16 : 9",  r: 16 / 9 },
+  { id: "4:3",     label: "4 : 3",   r: 4 / 3 },
+  { id: "1:1",     label: "1 : 1",   r: 1 },
+  { id: "twitter", label: "Twitter", r: 1200 / 628 }
+];
+
+/* Ten presets: five mesh, three linear, two solid.
+   Mesh blobs are in normalised coordinates; radius is a fraction of the
+   longest side. `blend` is the composite op used for the blobs. */
+const BACKGROUNDS = [
+  { id: "aurora", name: "Aurora", kind: "mesh", base: "#101427", blend: "screen", blobs: [
+      { x: .16, y: .16, r: .95, c: "#4f46e5", a: .95 },
+      { x: .88, y: .10, r: .80, c: "#0ea5e9", a: .80 },
+      { x: .74, y: .94, r: 1.0, c: "#a855f7", a: .82 },
+      { x: .04, y: .90, r: .70, c: "#22d3ee", a: .45 }
+  ]},
+  /* Warm and cool are kept in opposite corners with little overlap: screening
+     orange over a violet base in the middle turns to mud. */
+  { id: "dusk", name: "Dusk", kind: "mesh", base: "#150e22", blend: "screen", blobs: [
+      { x: .86, y: .14, r: .82, c: "#f0518c", a: .88 },
+      { x: .14, y: .86, r: .88, c: "#7c3aed", a: .82 },
+      { x: .34, y: .22, r: .52, c: "#3b82f6", a: .34 },
+      { x: .93, y: .92, r: .52, c: "#fbbf24", a: .30 }
+  ]},
+  { id: "bloom", name: "Bloom", kind: "mesh", base: "#fdeef3", blend: "source-over", blobs: [
+      { x: .14, y: .18, r: .90, c: "#fbcfe8", a: .95 },
+      { x: .88, y: .22, r: .85, c: "#ddd6fe", a: .90 },
+      { x: .62, y: .95, r: .95, c: "#fed7aa", a: .80 },
+      { x: .04, y: .92, r: .60, c: "#bfdbfe", a: .60 }
+  ]},
+  { id: "mist", name: "Mist", kind: "mesh", base: "#e4edf9", blend: "source-over", blobs: [
+      { x: .18, y: .14, r: .95, c: "#b9d3f2", a: .95 },
+      { x: .90, y: .30, r: .85, c: "#b6e2d6", a: .85 },
+      { x: .55, y: .98, r: .90, c: "#d6cdf6", a: .85 }
+  ]},
+  { id: "sand", name: "Sand", kind: "mesh", base: "#f5efe6", blend: "source-over", blobs: [
+      { x: .16, y: .20, r: .90, c: "#ecdfca", a: .95 },
+      { x: .88, y: .18, r: .80, c: "#f6dcc4", a: .85 },
+      { x: .60, y: .96, r: .95, c: "#e4e0d2", a: .90 }
+  ]},
+  { id: "tide", name: "Tide", kind: "linear", angle: 135, stops: [
+      [0, "#22d3ee"], [.52, "#3b82f6"], [1, "#6366f1"]
+  ]},
+  { id: "ember", name: "Ember", kind: "linear", angle: 145, stops: [
+      [0, "#fbbf24"], [.5, "#fb7185"], [1, "#e11d48"]
+  ]},
+  { id: "graphite", name: "Graphite", kind: "linear", angle: 160, stops: [
+      [0, "#3a4048"], [1, "#14161a"]
+  ]},
+  { id: "paper", name: "Paper", kind: "solid", color: "#f2f2f5" },
+  { id: "ink",   name: "Ink",   kind: "solid", color: "#0b0c10" }
+];
+
+/* ============================================================================
+   1. small helpers
+   ========================================================================== */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+function hexToRgb(hex) {
+  let h = String(hex || "").trim().replace(/^#/, "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function rgba(hex, a) {
+  const c = hexToRgb(hex) || { r: 0, g: 0, b: 0 };
+  return "rgba(" + c.r + "," + c.g + "," + c.b + "," + a + ")";
+}
+function normHex(v) {
+  const c = hexToRgb(v);
+  if (!c) return null;
+  return ("#" + ((1 << 24) + (c.r << 16) + (c.g << 8) + c.b).toString(16).slice(1)).toUpperCase();
+}
+
+/** Rounded-rect path built by hand — `ctx.roundRect` is too new to assume. */
+function roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  if (rr === 0) { ctx.rect(x, y, w, h); return; }
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x,     y + h, rr);
+  ctx.arcTo(x,     y + h, x,     y,     rr);
+  ctx.arcTo(x,     y,     x + w, y,     rr);
+  ctx.closePath();
+}
+
+function stamp() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
+         "-" + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+/* ============================================================================
+   2. state
+   ========================================================================== */
+
+const state = Object.assign({}, DEFAULTS);
+
+let image = null;        // HTMLImageElement | ImageBitmap
+let imageToken = 0;      // bumped per load; part of the card cache key
+let isDemo = true;
+
+function loadSettings() {
+  let raw;
+  try { raw = localStorage.getItem(STORE_KEY); } catch (e) { return; }
+  if (!raw) return;
+  let saved;
+  try { saved = JSON.parse(raw); } catch (e) { return; }
+  if (!saved || typeof saved !== "object") return;
+
+  // Validate everything — a stale or hand-edited blob must not brick the app.
+  if (BACKGROUNDS.some(b => b.id === saved.bg) || saved.bg === "custom") state.bg = saved.bg;
+  if (normHex(saved.custom)) state.custom = normHex(saved.custom);
+  if (Number.isFinite(saved.padding)) state.padding = clamp(saved.padding, 0, 30);
+  if (Number.isFinite(saved.radius))  state.radius  = clamp(saved.radius, 0, 100);
+  if (Number.isFinite(saved.shadow))  state.shadow  = clamp(saved.shadow, 0, 100);
+  if (RATIOS.some(r => r.id === saved.ratio)) state.ratio = saved.ratio;
+  if (saved.scale === 1 || saved.scale === 2) state.scale = saved.scale;
+}
+
+let saveTimer = 0;
+function saveSettings() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) { /* private mode */ }
+  }, 180);
+}
+
+/* ============================================================================
+   3. layout — everything in "composition space" (image at natural size)
+   ========================================================================== */
+
+function layout() {
+  const iw = image ? image.width  : 1200;
+  const ih = image ? image.height : 800;
+
+  // Padding is proportional to the image, not an absolute pixel count: 64px
+  // around a 320px thumbnail and around a 3200px retina capture are different
+  // pictures. sqrt(area) behaves far better than min/max on extreme strips.
+  const unit = Math.sqrt(iw * ih);
+  const pad = Math.round((state.padding / 100) * unit);
+
+  let compW = iw + pad * 2;
+  let compH = ih + pad * 2;
+
+  const ratio = (RATIOS.find(r => r.id === state.ratio) || {}).r;
+  if (ratio) {
+    // Grow the deficient axis — never crop. Padding is a minimum, not a target.
+    if (compW / compH < ratio) compW = Math.round(compH * ratio);
+    else compH = Math.round(compW / ratio);
+  }
+
+  compW = Math.max(1, Math.round(compW));
+  compH = Math.max(1, Math.round(compH));
+
+  return {
+    iw, ih, unit, pad, compW, compH,
+    imgX: Math.round((compW - iw) / 2),
+    imgY: Math.round((compH - ih) / 2)
+  };
+}
+
+/** Two-layer shadow, sized relative to the image so it stays proportional. */
+function shadowLayers(unit) {
+  const t = state.shadow / 60;                 // 60 is the tuned default → t = 1
+  if (t <= 0) return [];
+  const S = unit / 1200;                       // image-size factor
+  return [
+    { blur: 70 * S * t, dy: 34 * S * t, a: Math.min(.42, .30 * t) },  // ambient
+    { blur: 16 * S * t, dy:  7 * S * t, a: Math.min(.24, .16 * t) }   // contact
+  ];
+}
+
+/* ============================================================================
+   4. background painting  (composition space)
+   ========================================================================== */
+
+function activeBackground() {
+  if (state.bg === "custom") return { id: "custom", kind: "solid", color: state.custom };
+  return BACKGROUNDS.find(b => b.id === state.bg) || BACKGROUNDS[0];
+}
+
+function paintBackground(ctx, w, h, preset) {
+  const p = preset || activeBackground();
+
+  if (p.kind === "solid") {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+
+  if (p.kind === "linear") {
+    const a = ((p.angle == null ? 135 : p.angle) * Math.PI) / 180;
+    const len = Math.abs(w * Math.cos(a)) + Math.abs(h * Math.sin(a));
+    const dx = (Math.cos(a) * len) / 2, dy = (Math.sin(a) * len) / 2;
+    const g = ctx.createLinearGradient(w / 2 - dx, h / 2 - dy, w / 2 + dx, h / 2 + dy);
+    p.stops.forEach(s => g.addColorStop(s[0], s[1]));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+
+  // mesh
+  ctx.fillStyle = p.base;
+  ctx.fillRect(0, 0, w, h);
+
+  const long = Math.max(w, h);
+  ctx.save();
+  ctx.globalCompositeOperation = p.blend || "source-over";
+  for (const b of p.blobs) {
+    const r = b.r * long;
+    const g = ctx.createRadialGradient(b.x * w, b.y * h, 0, b.x * w, b.y * h, r);
+    // A linear alpha ramp leaves a visible blob edge; this smoothstep-ish
+    // falloff is what makes it read as a soft mesh rather than a spotlight.
+    g.addColorStop(0,   rgba(b.c, b.a));
+    g.addColorStop(.25, rgba(b.c, b.a * .82));
+    g.addColorStop(.5,  rgba(b.c, b.a * .50));
+    g.addColorStop(.75, rgba(b.c, b.a * .18));
+    g.addColorStop(1,   rgba(b.c, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  ctx.restore();
+}
+
+/* Grain: dithers away the banding that large 8-bit gradients always show, and
+   adds the faint texture that separates "designed" from "canvas default".
+   Generated once, tiled in *device* space — grain is a device-pixel effect. */
+let grainTile = null;
+function getGrainTile() {
+  if (grainTile) return grainTile;
+  const N = 160;
+  const c = document.createElement("canvas");
+  c.width = c.height = N;
+  const g = c.getContext("2d");
+  const img = g.createImageData(N, N);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = (Math.random() * 255) | 0;
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 16;
+  }
+  g.putImageData(img, 0, 0);
+  grainTile = c;
+  return c;
+}
+
+/* Grain is deliberately a device-space effect, which makes it the one part of
+   the picture that is *not* scale-invariant. The verification pass turns it
+   off to compare a 1× and a 2× render pixel for pixel. */
+const debugOpts = { grain: true };
+
+function paintGrain(ctx, deviceW, deviceH) {
+  if (!debugOpts.grain) return;
+  // Grain exists to dither gradient banding. A solid fill has no banding, and
+  // blending mid-grey noise over it would shift the colour the user picked
+  // (pure white would export at ~251). So solids stay exactly as chosen.
+  if (activeBackground().kind === "solid") return;
+  const pat = ctx.createPattern(getGrainTile(), "repeat");
+  if (!pat) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 0.5;                 // effective ≈ 3% — visible only as texture
+  ctx.fillStyle = pat;
+  ctx.fillRect(0, 0, deviceW, deviceH);
+  ctx.restore();
+}
+
+/* ============================================================================
+   5. the card — screenshot clipped to a rounded rect, at device resolution
+   ========================================================================== */
+
+let cardCache = { key: "", canvas: null };
+
+function buildCard(scale) {
+  const L = layout();
+  const w = Math.max(1, Math.round(L.iw * scale));
+  const h = Math.max(1, Math.round(L.ih * scale));
+  const key = imageToken + "|" + w + "|" + h + "|" + state.radius;
+  if (cardCache.key === key && cardCache.canvas) return cardCache.canvas;
+
+  const c = cardCache.canvas && cardCache.canvas.width === w && cardCache.canvas.height === h
+    ? cardCache.canvas
+    : document.createElement("canvas");
+  c.width = w; c.height = h;
+
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
+
+  const r = state.radius * scale;
+  g.save();
+  roundRectPath(g, 0, 0, w, h, r);
+  g.clip();
+  // Sourced from the *original* bitmap at the target device size — never
+  // rendered at 1× and upscaled, which would waste the only real resolution.
+  if (image) g.drawImage(image, 0, 0, w, h);
+  // Inner hairline: half of it is clipped away, so it reads as a ~0.5px
+  // highlight along the top edge. Subtle enough to survive any screenshot.
+  g.lineWidth = Math.max(1, scale);
+  g.strokeStyle = "rgba(255,255,255,0.10)";
+  roundRectPath(g, 0, 0, w, h, r);
+  g.stroke();
+  g.restore();
+
+  cardCache.key = key;
+  cardCache.canvas = c;
+  return c;
+}
+
+/* ============================================================================
+   5b. cached layers
+   --------------------------------------------------------------------------
+   Profiling a preview frame (2144×1312, M-series GPU) put ~65ms of a ~100ms
+   frame in the two shadow blurs and ~30ms in the mesh — 4fps while dragging a
+   slider. Both layers are cached, and the shadow is rendered at reduced
+   resolution, which is lossless for the reason given below.
+   ========================================================================== */
+
+/* Background + grain, at device resolution. Invalidated only by a change of
+   preset/colour or of canvas size, so radius and shadow drags never repaint it. */
+let bgCache = { key: "", canvas: null };
+
+function getBackgroundLayer(compW, compH, dw, dh) {
+  const p = activeBackground();
+  const key = [p.id, p.color || "", dw, dh, debugOpts.grain].join("|");
+  if (bgCache.key === key && bgCache.canvas) return bgCache.canvas;
+
+  const c = bgCache.canvas || document.createElement("canvas");
+  c.width = dw; c.height = dh;
+  const g = c.getContext("2d");
+  g.setTransform(dw / compW, 0, 0, dh / compH, 0, 0);
+  paintBackground(g, compW, compH, p);
+  paintGrain(g, dw, dh);
+
+  bgCache.key = key;
+  bgCache.canvas = c;
+  return c;
+}
+
+/* Both shadow layers, pre-blurred into one sprite that only needs blitting as
+   the card moves — so dragging padding or switching ratio costs nothing.
+   Cache key covers everything except position. */
+let shadowCache = { key: "", canvas: null, margin: 0 };
+
+/** A blurred shadow is band-limited by its own blur, so rendering it at a
+ *  resolution matched to that blur discards no real detail — it is a low-pass
+ *  signal being sampled above its Nyquist limit. Capping the blur at
+ *  SHADOW_BLUR_BUDGET px of sprite space bounds the cost, and because the
+ *  sprite scale is inversely proportional to the blur, the sprite comes out at
+ *  the *same absolute resolution* at 1× and at 2× — so this costs nothing in
+ *  preview/export parity either. */
+const SHADOW_BLUR_BUDGET = 24;
+
+function getShadowSprite(card, layers, scale) {
+  if (!layers.length) return null;
+
+  let maxBlur = 0, maxDy = 0;
+  for (const l of layers) {
+    maxBlur = Math.max(maxBlur, l.blur * scale);
+    maxDy = Math.max(maxDy, Math.abs(l.dy * scale));
+  }
+  const q = Math.min(1, SHADOW_BLUR_BUDGET / Math.max(1, maxBlur));
+  const margin = Math.ceil(maxBlur * 1.6 + maxDy + 4);
+  const destW = card.width + margin * 2;
+  const destH = card.height + margin * 2;
+
+  const key = [imageToken, state.radius, state.shadow, card.width, card.height, margin].join("|");
+  if (shadowCache.key === key && shadowCache.canvas) return shadowCache;
+
+  const sw = Math.max(1, Math.ceil(destW * q));
+  const sh = Math.max(1, Math.ceil(destH * q));
+  const c = document.createElement("canvas");
+  c.width = sw; c.height = sh;
+  const g = c.getContext("2d");
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = "high";
+
+  const cw = card.width * q, ch = card.height * q;
+  const mx = margin * q;
+  for (const l of layers) {
+    const blur = l.blur * scale * q;
+    // Cast from the card's own alpha (transparent window corners cast
+    // correctly) without painting the card: push the shape off-canvas and
+    // bring only its shadow back into frame.
+    const off = Math.ceil(sw + blur * 3 + 64);
+    g.save();
+    g.shadowColor = "rgba(0,0,0," + l.a + ")";
+    g.shadowBlur = blur;
+    g.shadowOffsetX = off;
+    g.shadowOffsetY = l.dy * scale * q;
+    g.drawImage(card, mx - off, mx, cw, ch);
+    g.restore();
+  }
+
+  shadowCache.key = key;
+  shadowCache.canvas = c;
+  shadowCache.margin = margin;
+  shadowCache.destW = destW;
+  shadowCache.destH = destH;
+  return shadowCache;
+}
+
+/* ============================================================================
+   6. the one renderer
+   ========================================================================== */
+
+/**
+ * Draw the whole composition into `ctx`.
+ *
+ * `scale` is the ONLY difference between the live preview, a 1× export and a
+ * 2× export. Everything expressed in device space — shadow blur and offset,
+ * the hairline width, the card's position and size — is multiplied by `scale`
+ * by hand, because the canvas transform does not apply to shadow parameters.
+ * Get that wrong and the export's shadow is half the weight of the preview.
+ */
+function render(ctx, scale) {
+  const L = layout();
+  const dw = Math.max(1, Math.round(L.compW * scale));
+  const dh = Math.max(1, Math.round(L.compH * scale));
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, dw, dh);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+
+  // 1 + 2 — background and grain, cached at device resolution
+  ctx.drawImage(getBackgroundLayer(L.compW, L.compH, dw, dh), 0, 0);
+
+  // 3 + 4 — shadow and card, in device space
+  const card = buildCard(scale);
+  const x = L.imgX * scale;
+  const y = L.imgY * scale;
+
+  const sp = getShadowSprite(card, shadowLayers(L.unit), scale);
+  if (sp) ctx.drawImage(sp.canvas, x - sp.margin, y - sp.margin, sp.destW, sp.destH);
+
+  // Outer hairline — separates a light screenshot from a light background.
+  ctx.save();
+  ctx.lineWidth = Math.max(1, scale);
+  ctx.strokeStyle = "rgba(0,0,0,0.07)";
+  roundRectPath(ctx, x, y, card.width, card.height, state.radius * scale);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.drawImage(card, x, y);
+  ctx.restore();
+  return { dw, dh, comp: L };
+}
+
+/* ============================================================================
+   7. live preview
+   ========================================================================== */
+
+const preview = $("#preview");
+const pctx = preview.getContext("2d");
+const canvasArea = $(".canvas-area");
+const canvasShell = $("#canvasShell");
+const sizeInfo = $("#sizeInfo");
+
+let frame = 0;
+function invalidate() {
+  if (frame) return;
+  frame = requestAnimationFrame(() => { frame = 0; drawPreview(); });
+}
+
+function fitScale(L) {
+  const rect = canvasArea.getBoundingClientRect();
+  const availW = Math.max(120, rect.width - 64);
+  const availH = Math.max(120, rect.height - 64);
+  return Math.min(1, availW / L.compW, availH / L.compH);
+}
+
+function drawPreview() {
+  const L = layout();
+  const fit = fitScale(L);
+  const dpr = window.devicePixelRatio || 1;
+
+  const cssW = Math.max(1, Math.round(L.compW * fit));
+  const cssH = Math.max(1, Math.round(L.compH * fit));
+
+  // Preview crispness (dpr) and export resolution (state.scale) are separate
+  // layers: the preview is always rendered at native device pixels regardless
+  // of which export multiplier is selected.
+  const scale = fit * dpr;
+  const dw = Math.max(1, Math.round(L.compW * scale));
+  const dh = Math.max(1, Math.round(L.compH * scale));
+
+  if (preview.width !== dw || preview.height !== dh) { preview.width = dw; preview.height = dh; }
+  preview.style.width = cssW + "px";
+  preview.style.height = cssH + "px";
+
+  render(pctx, scale);
+
+  const m = exportMultiplier(L, state.scale);
+  const outW = Math.round(L.compW * m), outH = Math.round(L.compH * m);
+  sizeInfo.textContent =
+    L.iw + " × " + L.ih + " screenshot" +
+    "  ·  " + L.compW + " × " + L.compH + " canvas" +
+    "  ·  export " + outW + " × " + outH + (m !== state.scale ? " (capped)" : "");
+}
+
+/* Track both element size and devicePixelRatio changes (moving the window to
+   a non-retina display must re-render, or the preview goes soft). */
+if (window.ResizeObserver) new ResizeObserver(invalidate).observe(canvasArea);
+else window.addEventListener("resize", invalidate);
+
+(function watchDPR() {
+  let mq = null;
+  const attach = () => {
+    if (mq && mq.removeEventListener) mq.removeEventListener("change", onChange);
+    mq = window.matchMedia("(resolution: " + (window.devicePixelRatio || 1) + "dppx)");
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+  };
+  const onChange = () => { invalidate(); attach(); };
+  attach();
+})();
+
+/* ============================================================================
+   8. export + clipboard
+   ========================================================================== */
+
+/** Largest multiplier ≤ `want` that stays inside the canvas ceilings. */
+function exportMultiplier(L, want) {
+  const byW = MAX_SIDE / L.compW;
+  const byH = MAX_SIDE / L.compH;
+  const byA = Math.sqrt(MAX_AREA / (L.compW * L.compH));
+  const m = Math.min(want, byW, byH, byA);
+  return m >= want ? want : Math.max(0.05, Math.floor(m * 100) / 100);
+}
+
+function renderExport(want) {
+  const L = layout();
+  const m = exportMultiplier(L, want);
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(L.compW * m));
+  c.height = Math.max(1, Math.round(L.compH * m));
+  const g = c.getContext("2d");
+  render(g, m);
+  return { canvas: c, multiplier: m, requested: want };
+}
+
+function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    if (canvas.toBlob) {
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error("The browser could not encode this canvas — it may be too large."))), "image/png");
+      return;
+    }
+    try {
+      const url = canvas.toDataURL("image/png");
+      const bin = atob(url.split(",")[1]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      resolve(new Blob([arr], { type: "image/png" }));
+    } catch (e) { reject(e); }
+  });
+}
+
+function exportBlob(want) {
+  const out = renderExport(want);
+  return canvasToBlob(out.canvas).then(blob => ({ blob: blob, out: out }));
+}
+
+let busy = false;
+function withBusy(fn) {
+  if (busy) return;
+  busy = true;
+  Promise.resolve()
+    .then(fn)
+    .catch(err => toast(err && err.message ? err.message : String(err), "err"))
+    .then(() => { busy = false; });
+}
+
+function doExport() {
+  withBusy(() => exportBlob(state.scale).then(({ blob, out }) => {
+    const name = "screenshot-" + stamp() + ".png";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 20000);
+
+    const capped = out.multiplier !== out.requested;
+    toast(capped
+      ? "Saved " + name + " — capped to " + out.multiplier + "× (canvas size limit)"
+      : "Saved " + name + " · " + out.canvas.width + " × " + out.canvas.height,
+      capped ? "err" : "ok");
+  }));
+}
+
+function doCopy() {
+  if (busy) return;
+  busy = true;
+
+  // Safari needs the clipboard write to be issued inside the user-gesture
+  // task. Handing ClipboardItem a *promise* is the sanctioned way to do that
+  // while PNG encoding happens asynchronously — so start it right here and
+  // never await before constructing the item.
+  const job = exportBlob(state.scale);
+  const blobPromise = job.then(r => r.blob);
+
+  const fail = (err) => job
+    .then(({ blob }) => openFallback(blob, err))
+    .catch(e2 => toast(e2.message || String(e2), "err"))
+    .then(() => { busy = false; });
+
+  try {
+    if (!navigator.clipboard || !window.ClipboardItem || !navigator.clipboard.write) {
+      throw new Error(window.isSecureContext === false
+        ? "This page isn't a secure context, so Safari blocks clipboard writes."
+        : "This browser doesn't support writing images to the clipboard.");
+    }
+
+    let item;
+    try {
+      item = new ClipboardItem({ "image/png": blobPromise });   // promise form
+    } catch (e) {
+      item = null;                                             // older engine
+    }
+
+    const write = item
+      ? navigator.clipboard.write([item])
+      : blobPromise.then(b => navigator.clipboard.write([new ClipboardItem({ "image/png": b })]));
+
+    write.then(
+      () => job.then(({ out }) => {
+        toast("Copied to clipboard · " + out.canvas.width + " × " + out.canvas.height, "ok");
+        busy = false;
+      }),
+      err => fail(err)
+    );
+  } catch (err) {
+    fail(err);
+  }
+}
+
+/* ---- clipboard fallback sheet ------------------------------------------- */
+
+const fallbackDlg = $("#fallback");
+const fallbackImg = $("#fallbackImg");
+const fallbackWhy = $("#fallbackWhy");
+let fallbackURL = null;
+let fallbackBlob = null;
+
+function openFallback(blob, err) {
+  if (fallbackURL) URL.revokeObjectURL(fallbackURL);
+  fallbackBlob = blob;
+  fallbackURL = URL.createObjectURL(blob);
+  fallbackImg.src = fallbackURL;
+
+  const reason = err && err.message ? err.message : "The clipboard write was refused.";
+  const insecure = window.isSecureContext === false;
+  fallbackWhy.innerHTML =
+    escapeHTML(reason) +
+    (insecure
+      ? " Opening the file directly over <code>file://</code> is not a secure context, and Safari only allows " +
+        "<code>navigator.clipboard.write</code> on secure ones. Serving the file over " +
+        "<code>http://localhost</code> restores Copy."
+      : " You can still get the image out below.");
+
+  toast("Copy blocked — use the panel to save or drag the image", "err");
+  if (typeof fallbackDlg.showModal === "function") fallbackDlg.showModal();
+  else fallbackDlg.setAttribute("open", "");
+}
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+$("#fallbackClose").addEventListener("click", () => fallbackDlg.close());
+$("#fallbackDownload").addEventListener("click", () => {
+  if (!fallbackBlob) return;
+  const a = document.createElement("a");
+  a.href = fallbackURL;
+  a.download = "screenshot-" + stamp() + ".png";
+  document.body.appendChild(a); a.click(); a.remove();
+  toast("Saved", "ok");
+});
+
+/* ============================================================================
+   9. toasts
+   ========================================================================== */
+
+const toastHost = $("#toasts");
+const ICON_OK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4 4 10-10"/></svg>';
+const ICON_ERR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/><path d="M12 16.4v.01"/></svg>';
+
+function toast(msg, kind) {
+  const el = document.createElement("div");
+  el.className = "toast " + (kind === "err" ? "err" : kind === "ok" ? "ok" : "");
+  el.innerHTML = (kind === "err" ? ICON_ERR : kind === "ok" ? ICON_OK : "") + "<span></span>";
+  el.lastChild.textContent = msg;
+  toastHost.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("out");
+    setTimeout(() => el.remove(), 220);
+  }, kind === "err" ? 5200 : 2400);
+}
+
+/* ============================================================================
+   10. image input — drop, paste, picker
+   ========================================================================== */
+
+function setImage(bitmap, demo) {
+  if (image && image.close) { try { image.close(); } catch (e) {} }
+  image = bitmap;
+  imageToken++;
+  cardCache.key = "";
+  isDemo = !!demo;
+  $("#demoBadge").hidden = !isDemo;
+  invalidate();
+}
+
+function decode(blob) {
+  if (window.createImageBitmap) {
+    // `from-image` honours EXIF orientation where the engine supports the
+    // option; the catch covers engines that reject the options bag outright.
+    return createImageBitmap(blob, { imageOrientation: "from-image" })
+      .catch(() => createImageBitmap(blob))
+      .catch(() => decodeViaImg(blob));
+  }
+  return decodeViaImg(blob);
+}
+
+function decodeViaImg(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { resolve(img); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("That file could not be decoded as an image.")); };
+    img.src = url;
+  });
+}
+
+function acceptFile(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type || "")) {
+    toast("That's not an image — drop a PNG, JPEG, WebP or GIF.", "err");
+    return;
+  }
+  decode(file).then(
+    bmp => {
+      setImage(bmp, false);
+      toast("Loaded " + bmp.width + " × " + bmp.height, "ok");
+    },
+    err => toast(err.message || "Could not read that image.", "err")
+  );
+}
+
+/* --- drag & drop over the whole window ----------------------------------- */
+let dragDepth = 0;
+window.addEventListener("dragenter", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  document.body.classList.add("dragging");
+});
+window.addEventListener("dragover", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+});
+window.addEventListener("dragleave", e => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) document.body.classList.remove("dragging");
+});
+window.addEventListener("drop", e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging");
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  // First image only — dropping never stacks.
+  const files = dt.files && dt.files.length ? Array.prototype.slice.call(dt.files) : [];
+  const img = files.filter(f => /^image\//.test(f.type || ""))[0] || files[0];
+  acceptFile(img);
+});
+function hasFiles(e) {
+  const dt = e.dataTransfer;
+  if (!dt) return false;
+  if (dt.types) for (let i = 0; i < dt.types.length; i++) if (dt.types[i] === "Files") return true;
+  return false;
+}
+
+/* --- paste ---------------------------------------------------------------- */
+window.addEventListener("paste", e => {
+  const cd = e.clipboardData;
+  if (!cd) return;
+  let file = null;
+  if (cd.files && cd.files.length) {
+    for (let i = 0; i < cd.files.length; i++) if (/^image\//.test(cd.files[i].type)) { file = cd.files[i]; break; }
+  }
+  if (!file && cd.items) {
+    for (let i = 0; i < cd.items.length; i++) {
+      const it = cd.items[i];
+      if (it.kind === "file" && /^image\//.test(it.type)) { file = it.getAsFile(); break; }
+    }
+  }
+  if (file) { e.preventDefault(); acceptFile(file); }
+});
+
+/* --- file picker ---------------------------------------------------------- */
+const picker = $("#filePicker");
+picker.addEventListener("change", () => {
+  acceptFile(picker.files && picker.files[0]);
+  picker.value = "";
+});
+const openPicker = () => picker.click();
+$("#openBtn").addEventListener("click", openPicker);
+$("#demoBadge").addEventListener("click", openPicker);
+
+/* ============================================================================
+   11. controls
+   ========================================================================== */
+
+/* --- background swatches -------------------------------------------------- */
+const swatchHost = $("#swatches");
+
+function buildSwatches() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = 52, H = 39;
+
+  BACKGROUNDS.forEach(p => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "sw";
+    b.dataset.bg = p.id;
+    b.title = p.name;
+    b.setAttribute("aria-label", p.name);
+    const c = document.createElement("canvas");
+    c.width = Math.round(W * dpr);
+    c.height = Math.round(H * dpr);
+    const g = c.getContext("2d");
+    // Painted with the very same routine as the real canvas, so a swatch can
+    // never drift from what it actually produces.
+    g.setTransform(c.width / W, 0, 0, c.height / H, 0, 0);
+    paintBackground(g, W, H, p);
+    b.appendChild(c);
+    b.addEventListener("click", () => { state.bg = p.id; syncUI(); saveSettings(); invalidate(); });
+    swatchHost.appendChild(b);
+  });
+
+  const custom = document.createElement("button");
+  custom.type = "button";
+  custom.className = "sw custom";
+  custom.dataset.bg = "custom";
+  custom.title = "Custom colour";
+  custom.setAttribute("aria-label", "Custom colour");
+  custom.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+  custom.addEventListener("click", () => { state.bg = "custom"; syncUI(); saveSettings(); invalidate(); });
+  swatchHost.appendChild(custom);
+}
+
+const colorInput = $("#customColor");
+const hexInput = $("#hexInput");
+
+function applyCustom(value, fromHexField) {
+  const hex = normHex(value);
+  if (!hex) return false;
+  state.custom = hex;
+  state.bg = "custom";
+  if (!fromHexField) hexInput.value = hex;
+  colorInput.value = hex.toLowerCase();
+  syncUI();
+  saveSettings();
+  invalidate();
+  return true;
+}
+colorInput.addEventListener("input", () => applyCustom(colorInput.value, false));
+hexInput.addEventListener("input", () => {
+  const v = hexInput.value.trim();
+  if (normHex(v)) applyCustom(v, true);
+});
+hexInput.addEventListener("blur", () => { hexInput.value = state.custom; });
+
+/* --- ratio pills ---------------------------------------------------------- */
+const ratioHost = $("#ratios");
+RATIOS.forEach(r => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "pill";
+  b.dataset.ratio = r.id;
+  b.textContent = r.label;
+  if (r.id === "twitter") b.title = "1200 × 628 — the aspect ratio of a large post image";
+  if (r.id === "auto") b.title = "Canvas hugs the screenshot plus its padding";
+  b.addEventListener("click", () => { state.ratio = r.id; syncUI(); saveSettings(); invalidate(); });
+  ratioHost.appendChild(b);
+});
+
+/* --- sliders -------------------------------------------------------------- */
+const SLIDERS = [
+  { key: "padding", el: $("#padding"), out: $("#paddingOut"), fmt: v => v.toFixed(1).replace(/\.0$/, "") + "%" },
+  { key: "radius",  el: $("#radius"),  out: $("#radiusOut"),  fmt: v => (v === 0 ? "Square" : v + " px") },
+  { key: "shadow",  el: $("#shadow"),  out: $("#shadowOut"),  fmt: v => (v === 0 ? "None" : v + "%") }
+];
+SLIDERS.forEach(s => {
+  s.el.addEventListener("input", () => {
+    state[s.key] = parseFloat(s.el.value);
+    syncSlider(s);
+    saveSettings();
+    invalidate();
+  });
+  // Double-click a slider to restore its default — a small Mac-app nicety.
+  s.el.addEventListener("dblclick", () => {
+    state[s.key] = DEFAULTS[s.key];
+    s.el.value = state[s.key];
+    syncSlider(s);
+    saveSettings();
+    invalidate();
+  });
+});
+function syncSlider(s) {
+  const min = parseFloat(s.el.min), max = parseFloat(s.el.max);
+  s.el.style.setProperty("--pct", (((state[s.key] - min) / (max - min)) * 100).toFixed(2) + "%");
+  s.out.textContent = s.fmt(state[s.key]);
+}
+
+/* --- export scale --------------------------------------------------------- */
+$("#scaleSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-scale]");
+  if (!b) return;
+  state.scale = parseInt(b.dataset.scale, 10);
+  syncUI();
+  saveSettings();
+  invalidate();
+});
+
+/* --- actions -------------------------------------------------------------- */
+$("#copyBtn").addEventListener("click", doCopy);
+$("#exportBtn").addEventListener("click", doExport);
+$("#resetBtn").addEventListener("click", () => {
+  Object.assign(state, DEFAULTS);
+  syncUI();
+  saveSettings();
+  invalidate();
+  toast("Settings reset", "ok");
+});
+
+/* --- keyboard ------------------------------------------------------------- */
+document.addEventListener("keydown", e => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const k = (e.key || "").toLowerCase();
+  const el = document.activeElement;
+  const typing = el && (el.tagName === "INPUT" && el.type === "text" || el.tagName === "TEXTAREA" || el.isContentEditable);
+
+  if (k === "c") {
+    // Never steal ⌘C from a real text selection or a focused text field.
+    if (typing) return;
+    const sel = window.getSelection();
+    if (sel && String(sel).length) return;
+    e.preventDefault();
+    doCopy();
+  } else if (k === "s") {
+    e.preventDefault();
+    doExport();
+  } else if (k === "o") {
+    e.preventDefault();
+    openPicker();
+  }
+});
+
+/* --- keep the UI and the state in agreement ------------------------------- */
+function syncUI() {
+  Array.prototype.forEach.call(swatchHost.children, b =>
+    b.setAttribute("aria-pressed", String(b.dataset.bg === state.bg)));
+  const customSw = swatchHost.querySelector(".sw.custom");
+  if (customSw) customSw.style.setProperty("--sw-color", state.custom);
+
+  colorInput.value = state.custom.toLowerCase();
+  if (document.activeElement !== hexInput) hexInput.value = state.custom;
+
+  Array.prototype.forEach.call(ratioHost.children, b =>
+    b.setAttribute("aria-pressed", String(b.dataset.ratio === state.ratio)));
+
+  Array.prototype.forEach.call($("#scaleSeg").children, b =>
+    b.setAttribute("aria-pressed", String(parseInt(b.dataset.scale, 10) === state.scale)));
+
+  SLIDERS.forEach(s => { s.el.value = state[s.key]; syncSlider(s); });
+}
+
+/* ============================================================================
+   12. demo composition — so the first screen already sells the idea
+   ========================================================================== */
+
+function makeDemoImage() {
+  const W = 1440, H = 900;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const g = c.getContext("2d");
+  const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+  const T = dark
+    ? { bg:"#1b1d23", side:"#16181d", line:"rgba(255,255,255,.08)", bar:"#22252c",
+        text:"rgba(255,255,255,.82)", faint:"rgba(255,255,255,.13)", card:"#20232a", accent:"#6d8cff" }
+    : { bg:"#ffffff", side:"#f6f6f8", line:"rgba(0,0,0,.07)", bar:"#f0f0f3",
+        text:"rgba(0,0,0,.78)", faint:"rgba(0,0,0,.09)", card:"#fbfbfd", accent:"#3b5bfd" };
+
+  g.fillStyle = T.bg; g.fillRect(0, 0, W, H);
+
+  const SIDE = 300, BAR = 62;
+  g.fillStyle = T.side; g.fillRect(0, 0, SIDE, H);
+  g.fillStyle = T.bar;  g.fillRect(SIDE, 0, W - SIDE, BAR);
+  g.fillStyle = T.line;
+  g.fillRect(SIDE, 0, 1, H);
+  g.fillRect(SIDE, BAR, W - SIDE, 1);
+
+  // traffic lights
+  ["#ff5f57", "#febc2e", "#28c840"].forEach((col, i) => {
+    g.beginPath(); g.arc(28 + i * 20, 31, 6, 0, Math.PI * 2);
+    g.fillStyle = col; g.fill();
+  });
+
+  const bar = (x, y, w, h, r, fill) => { roundRectPath(g, x, y, w, h, r); g.fillStyle = fill; g.fill(); };
+
+  // sidebar rows
+  bar(24, 74, 120, 9, 4.5, T.faint);
+  for (let i = 0; i < 7; i++) {
+    const y = 104 + i * 40;
+    if (i === 1) bar(16, y - 8, SIDE - 32, 32, 8, T.accent + "22");
+    bar(28, y, 14, 14, 4, i === 1 ? T.accent : T.faint);
+    bar(52, y + 3, 90 + ((i * 37) % 90), 9, 4.5, i === 1 ? T.text : T.faint);
+  }
+
+  // toolbar
+  bar(SIDE + 28, 25, 170, 13, 6.5, T.faint);
+  bar(W - 150, 20, 54, 22, 8, T.faint);
+  bar(W - 86, 20, 58, 22, 8, T.accent);
+
+  // content
+  bar(SIDE + 28, BAR + 40, 300, 17, 8, T.text);
+  bar(SIDE + 28, BAR + 70, 470, 10, 5, T.faint);
+
+  for (let i = 0; i < 4; i++) {
+    const x = SIDE + 28 + (i % 2) * 385, y = BAR + 116 + Math.floor(i / 2) * 190;
+    roundRectPath(g, x, y, 355, 160, 14);
+    g.fillStyle = T.card; g.fill();
+    g.strokeStyle = T.line; g.lineWidth = 1; g.stroke();
+    bar(x + 20, y + 20, 34, 34, 10, i === 0 ? T.accent : T.faint);
+    bar(x + 66, y + 26, 130, 10, 5, T.faint);
+    bar(x + 66, y + 42, 84, 8, 4, T.faint);
+    // a little sparkline so the mock reads as a real product surface
+    g.beginPath();
+    for (let s = 0; s <= 22; s++) {
+      const px = x + 20 + (s / 22) * 315;
+      const py = y + 132 - (Math.sin(s * 0.55 + i * 1.7) * 0.5 + 0.5) * 52 - (s / 22) * 8;
+      s ? g.lineTo(px, py) : g.moveTo(px, py);
+    }
+    g.strokeStyle = i === 0 ? T.accent : T.faint;
+    g.lineWidth = 3; g.lineJoin = "round"; g.lineCap = "round";
+    g.stroke();
+  }
+
+  return c;
+}
+
+/* ============================================================================
+   13. brand mark
+   ========================================================================== */
+
+(function drawBrandMark() {
+  const c = $("#brandMark");
+  const g = c.getContext("2d");
+  const N = c.width;
+  const grad = g.createLinearGradient(0, 0, N, N);
+  grad.addColorStop(0, "#6366f1"); grad.addColorStop(.55, "#a855f7"); grad.addColorStop(1, "#f472b6");
+  roundRectPath(g, 0, 0, N, N, N * 0.24);
+  g.fillStyle = grad; g.fill();
+  g.globalAlpha = .25;
+  roundRectPath(g, N * .2, N * .27, N * .6, N * .46, N * .09);
+  g.fillStyle = "#fff"; g.fill();
+  g.globalAlpha = 1;
+  roundRectPath(g, N * .27, N * .34, N * .46, N * .32, N * .06);
+  g.fillStyle = "#fff"; g.fill();
+})();
+
+/* ============================================================================
+   14. boot
+   ========================================================================== */
+
+loadSettings();
+buildSwatches();
+syncUI();
+setImage(makeDemoImage(), true);
+
+// Block the browser's default "open the dropped file" behaviour everywhere.
+["dragover", "drop"].forEach(t =>
+  document.addEventListener(t, e => { if (hasFiles(e)) e.preventDefault(); }, false));
+
+window.addEventListener("beforeunload", () => {
+  if (fallbackURL) URL.revokeObjectURL(fallbackURL);
+});
+
+/* A deliberate, documented test seam: the verification pass renders the same
+   composition at two scales and compares them, which is the only way to catch
+   a device-space quantity that was left unscaled. */
+window.__myshot = {
+  state, layout, render, renderExport, exportMultiplier, debugOpts,
+  setImage, makeDemoImage, BACKGROUNDS, RATIOS, DEFAULTS,
+  get image() { return image; },
+  invalidate, syncUI
+};
+
+})();
+</script>
+</body>
+</html>
