@@ -73,8 +73,11 @@ They cannot drift apart, because the same code produces both.
 - **Backgrounds** are a base fill plus soft radial blobs in fractional coordinates, so a preset
   reflows correctly at any aspect ratio. Swatches are real renders of the same function, so a swatch
   can't drift from what the canvas paints.
-- **Grain** is a cached 128×128 noise tile at ±2.5/255 — invisible as texture, but it dithers away
-  the banding that 8-bit canvas gradients produce.
+- **Grain** is a cached 8×8 ordered (Bayer) dither tile at a fixed ~2.5/255 alpha — invisible as
+  texture, but it dithers away the banding that 8-bit canvas gradients produce. It used to be a
+  128×128 tile of independent random noise; that looked the same but produced near-incompressible
+  PNGs (a 12MB export was routine). An ordered pattern gives the same effect at a fraction of the
+  exported file size, since it's periodic instead of random.
 - Large sources are downscaled to preview size by successive halving; the artwork is cached on
   `(image, crop, scale, radius, edge)`, so dragging padding or shadow never re-renders the image.
   A cropped region is lifted out at native size once and cached too, on whole pixels — a fractional
