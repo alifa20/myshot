@@ -25,7 +25,8 @@ Every control is live — there is nothing to apply. Settings (not the image) pe
 
 **Controls** — padding, corner radius, shadow, canvas ratio (Auto · 16:9 · 4:3 · 1:1 · 2:1 for
 X/Twitter), 12 background presets (6 mesh, 3 gradient, 3 solid) plus transparent and a custom
-colour, edge definition, grain, and 1× / 2× export scale.
+colour, edge definition, grain, and 1× / 2× export scale (1× — actual size — by default; every
+export is also capped at 1MB regardless of which scale is picked, see Guardrails below).
 
 ### Cropping and annotating
 
@@ -92,10 +93,18 @@ They cannot drift apart, because the same code produces both.
 
 - 2× exports that would exceed the engine's canvas limits fall back to 1× **with a visible notice**,
   rather than handing back a blank PNG.
-- `toBlob` returning null, an undecodable file, and a non-image drop each surface as an error.
-- Clipboard writes build the `ClipboardItem` from the *promise* of the blob, synchronously inside
-  the gesture — Safari drops user activation across an `await`. If the write still fails (e.g. no
-  secure context) the toast says why and offers **Download instead**; Copy never fails silently.
+- Every export/copy is capped at 1MB. It's measured synchronously (`toDataURL`, not `toBlob`) right
+  after painting; if it lands over budget, grain is dropped and re-measured, and if it's *still* over
+  budget the resolution is shrunk in a loop (each step re-measured, not estimated-and-hoped) until it
+  fits or hits a floor — an output small enough that even literal random-noise pixels would compress
+  under 1MB, so the loop can't stop with the cap still blown. Whatever combination of grain-drop and
+  shrink actually happened is named in the toast, e.g. "grain dropped and scaled down to stay under
+  1MB". An undecodable file and a non-image drop each surface as their own error.
+- Clipboard writes build the `ClipboardItem` from the real `Blob`, synchronously inside the gesture —
+  Safari drops user activation across an `await`, and the size-budget loop above is itself sync
+  (`toDataURL`) precisely so it can run before `clipboard.write()` without losing that activation. If
+  the write still fails (e.g. no secure context) the toast says why and offers **Download instead**;
+  Copy never fails silently.
 - `localStorage` access is wrapped; the app runs normally in private mode.
 - `ctx.roundRect` is feature-detected with an `arcTo` fallback.
 

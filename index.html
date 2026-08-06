@@ -668,7 +668,7 @@ var DEFAULTS = {
   ratio:   'auto',
   grain:   true,
   edge:    true,
-  scale:   2,
+  scale:   1,
   color:   '#FF453A',   /* annotation colour */
   weight:  46           /* 10-100 → % of the shortest edge, ×0.016 */
 };
@@ -1117,7 +1117,7 @@ function layout () {
   };
 }
 
-function paint (canvas, S) {
+function paint (canvas, S, opts) {
   var L = layout();
   if (!L) return null;
 
@@ -1131,7 +1131,7 @@ function paint (canvas, S) {
 
   var bg = activeBg();
   drawBackground(g, OW, OH, bg);
-  if (state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
+  if (!(opts && opts.noGrain) && state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
 
   var art = getArtwork(L, S);
   var ax = Math.round(L.x * S), ay = Math.round(L.y * S);
@@ -1584,6 +1584,14 @@ function fillTrack (el) {
    7 · EXPORT / COPY
    ═══════════════════════════════════════════════════════════════════════ */
 
+var MAX_EXPORT_BYTES = 1024 * 1024;    /* hard ceiling on an exported/copied PNG */
+/* Stop shrinking once the output is this few pixels — floored on *area*, not
+   longest edge, so a square canvas ratio can't sneak past it with more total
+   pixels than a wide one. Even a worst-case incompressible image (uniform
+   random noise, far busier than any real screenshot) stays under budget at
+   this area, regardless of aspect ratio. */
+var MIN_EXPORT_AREA = 260000;
+
 function exportScale (L) {
   /* Drop to 1× rather than hand back a blank canvas from an over-sized buffer. */
   var s = state.scale;
@@ -1592,20 +1600,82 @@ function exportScale (L) {
   return s;
 }
 
-function renderExport () {
-  var L = layout();
-  if (!L) throw new Error('No image loaded');
-  var s = exportScale(L);
+function paintCanvasAt (scale, noGrain) {
   var c = makeCanvas(1, 1);
-  var out = paint(c, s);
+  var out = paint(c, scale, { noGrain:noGrain });
   if (!out || c.width !== out.W || c.height !== out.H) throw new Error('Canvas too large for this browser');
-  return { canvas:c, scale:s, W:out.W, H:out.H };
+  return c;
 }
 
-function toBlob (canvas) {
-  return new Promise(function (resolve, reject) {
-    canvas.toBlob(function (b) { b ? resolve(b) : reject(new Error('PNG encoding failed')); }, 'image/png');
-  });
+function dataUrlByteLength (url) {
+  var b64 = url.length - (url.indexOf(',') + 1);
+  var pad = url.endsWith('==') ? 2 : url.endsWith('=') ? 1 : 0;
+  return Math.floor(b64 * 3 / 4) - pad;
+}
+
+function dataUrlToBlob (url) {
+  var bin = atob(url.slice(url.indexOf(',') + 1));
+  var buf = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Blob([buf], { type:'image/png' });
+}
+
+/* Renders the export/copy artwork and, if it lands over MAX_EXPORT_BYTES,
+   drops grain and then shrinks the resolution until it doesn't. Size is
+   measured synchronously via toDataURL rather than the async toBlob —
+   doCopy has to reach clipboard.write() without ever awaiting, since
+   Safari drops user-gesture activation across an await. */
+function renderBudgeted () {
+  var L = layout();
+  if (!L) throw new Error('No image loaded');
+
+  var requestedScale = state.scale;
+  var scale = exportScale(L);
+  var engineFallback = scale !== requestedScale;
+
+  var canvas = paintCanvasAt(scale, false);
+  var url = canvas.toDataURL('image/png');
+  var bytes = dataUrlByteLength(url);
+  var grainDropped = false, shrunk = false;
+
+  if (bytes > MAX_EXPORT_BYTES && state.grain && activeBg().kind !== 'transparent') {
+    canvas = paintCanvasAt(scale, true);
+    url = canvas.toDataURL('image/png');
+    bytes = dataUrlByteLength(url);
+    grainDropped = true;
+  }
+
+  var guard = 0;
+  while (bytes > MAX_EXPORT_BYTES && (L.W * scale) * (L.H * scale) > MIN_EXPORT_AREA && guard < 8) {
+    var f = Math.sqrt(MAX_EXPORT_BYTES / bytes);
+    scale *= Math.max(0.5, Math.min(0.92, f));
+    canvas = paintCanvasAt(scale, true);
+    url = canvas.toDataURL('image/png');
+    bytes = dataUrlByteLength(url);
+    shrunk = true;
+    guard++;
+  }
+
+  return {
+    canvas:canvas, blob:dataUrlToBlob(url), W:canvas.width, H:canvas.height, bytes:bytes,
+    engineFallback:engineFallback, grainDropped:grainDropped, shrunk:shrunk
+  };
+}
+
+function fmtBytes (n) {
+  return n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function budgetNote (r) {
+  var bits = [];
+  if (r.engineFallback) bits.push('fell back to 1× — 2× exceeds this browser’s canvas limit');
+  if (r.grainDropped || r.shrunk) {
+    var why = [];
+    if (r.grainDropped) why.push('grain dropped');
+    if (r.shrunk) why.push('scaled down');
+    bits.push(why.join(' and ') + ' to stay under 1MB');
+  }
+  return bits.length ? ' (' + bits.join('; ') + ')' : '';
 }
 
 function stamp () {
@@ -1617,20 +1687,19 @@ var lastBlobUrl = null;
 function doExport () {
   if (!source) return;
   var r;
-  try { r = renderExport(); }
+  try { r = renderBudgeted(); }
   catch (e) { return toast(e.message, 'err'); }
 
-  toBlob(r.canvas).then(function (blob) {
-    if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-    lastBlobUrl = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = lastBlobUrl;
-    a.download = 'screenshot-' + stamp() + '.png';
-    document.body.appendChild(a); a.click(); a.remove();
-    var note = r.scale !== state.scale ? ' (fell back to 1× — 2× exceeds this browser’s canvas limit)' : '';
-    toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG' + note, r.scale !== state.scale ? 'warn' : 'ok');
-    setTimeout(function () { if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; } }, 60000);
-  }).catch(function (e) { toast(e.message || 'Export failed', 'err'); });
+  if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+  lastBlobUrl = URL.createObjectURL(r.blob);
+  var a = document.createElement('a');
+  a.href = lastBlobUrl;
+  a.download = 'screenshot-' + stamp() + '.png';
+  document.body.appendChild(a); a.click(); a.remove();
+
+  var warn = r.engineFallback || r.grainDropped || r.shrunk;
+  toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
+  setTimeout(function () { if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; } }, 60000);
 }
 
 function doCopy () {
@@ -1640,23 +1709,20 @@ function doCopy () {
     return copyFailed('This browser can’t write images to the clipboard.');
   }
 
-  /* Safari drops user activation across an await, so the ClipboardItem must be
-     built synchronously here — from the *promise* of the blob, not the blob. */
-  var blobPromise;
-  try {
-    var r = renderExport();
-    blobPromise = toBlob(r.canvas);
-  } catch (e) {
-    return copyFailed(e.message);
-  }
-  blobPromise.catch(function () {});   /* keep an unhandled rejection out of the console */
+  /* Everything above this point (including renderBudgeted's shrink loop) is
+     synchronous — toDataURL, not toBlob — so nothing here has awaited yet
+     and the ClipboardItem can still be built inside the user gesture. */
+  var r;
+  try { r = renderBudgeted(); }
+  catch (e) { return copyFailed(e.message); }
 
   var item;
-  try { item = new ClipboardItem({ 'image/png': blobPromise }); }
+  try { item = new ClipboardItem({ 'image/png': r.blob }); }
   catch (e) { return copyFailed('Clipboard rejected the image.'); }
 
   navigator.clipboard.write([item]).then(function () {
-    toast('Copied to clipboard', 'ok');
+    var warn = r.engineFallback || r.grainDropped || r.shrunk;
+    toast('Copied to clipboard, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
   }).catch(function (err) {
     var why = !window.isSecureContext
       ? 'The clipboard needs a secure context — this page is on file://.'
