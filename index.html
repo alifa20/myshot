@@ -736,7 +736,11 @@ function makeCell () {
     cropCache:emptyCache()
   };
 }
-var cells = [makeCell()];
+var cells = [];
+/* the active layout always has a cell object per visible slot — at boot (the
+   layout is restored from localStorage) and on every switch */
+function ensureCells (n) { while (cells.length < n) cells.push(makeCell()); }
+ensureCells(visibleCount());
 var active = 0;
 function cur () { return cells[active]; }
 function anyFilled () {
@@ -1507,7 +1511,7 @@ function pushHistory () {
 }
 
 function undo () {
-  if (!history.length) return;
+  if (!history.length || drag) return;
   var prev = JSON.parse(history.pop());
   var changed = -1;
   for (var i = 0; i < cells.length && i < prev.cells.length; i++) {
@@ -1517,7 +1521,10 @@ function undo () {
     cells[i].crop = prev.cells[i].crop; cells[i].shapes = prev.cells[i].shapes;
   }
   /* the highlight follows the change — but only to a cell that is on screen */
-  if (changed >= 0 && changed < visibleCount()) active = changed;
+  if (changed >= 0 && changed < visibleCount() && changed !== active) {
+    if (cropping) setTool('select');                  /* close the open crop session before leaving its cell */
+    active = changed;
+  }
   selected = -1; draft = null;
   invalidate();
   syncEditUI(); requestRender();
@@ -1631,8 +1638,8 @@ overlay.addEventListener('pointerdown', function (e) {
     return;
   }
   if (idx >= 0 && idx !== active) {
-    if (cropping) selectCell(idx);
-    else { active = idx; selected = -1; draft = null; requestRender(); }
+    if (cropping) { selectCell(idx); return; }   /* commit, switch, re-open crop there; the press itself is the switch */
+    active = idx; selected = -1; draft = null; requestRender();
   }
   if (!activeSlot()) return;
 
@@ -1776,6 +1783,7 @@ function setTool (id) {
    would), then re-opened on the target if it holds an image; an empty target
    drops to Select, since there is nothing to crop. */
 function selectCell (idx) {
+  if (drag) return;                                   /* never mid-gesture: the drag owns draft */
   if (idx < 0 || idx >= visibleCount() || !cells[idx]) return;
   var wasCropping = cropping;
   if (cropping) setTool('select');
@@ -2066,7 +2074,9 @@ function syncChip () {
 
 /* land a decoded image in its cell and say where it went */
 function finishLoad (cell, img, w, h, name) {
-  var into = intoSlot(cells.indexOf(cell));
+  var idx = cells.indexOf(cell);
+  if (idx < 0 || idx >= visibleCount()) { cell = cells[active]; idx = active; }   /* slot parked mid-decode */
+  var into = intoSlot(idx);
   setSource(cell, img, w, h, name);
   toast(fmt(w) + '×' + fmt(h) + ' loaded' + into, 'ok');
 }
@@ -2272,7 +2282,7 @@ function setLayout (id) {
 
   state.layout = lay.id;
   var n = lay.cols * lay.rows;
-  while (cells.length < n) cells.push(makeCell());
+  ensureCells(n);
 
   for (var i = n; i < cells.length; i++) {
     if (!cells[i].source) continue;
