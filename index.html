@@ -725,14 +725,15 @@ function visibleCount () { var l = activeLayout(); return l.cols * l.rows; }
    lives here rather than in `state`. Coordinates are in the cell's own SOURCE
    pixels, so a shape stays anchored to what it points at through cropping,
    ratio changes, layout changes and either export scale. */
+function emptyCache () { return { key:'', canvas:null }; }
 function makeCell () {
   return {
     source:null,          /* { img, w, h, name } */
     rev:0,                /* bumped on every load/clear; part of both cache keys */
     crop:null,            /* {x,y,w,h} in source px, or null */
     shapes:[],            /* {type,x1,y1,x2,y2,color,weight} */
-    art:{ key:'', canvas:null },
-    cropCache:{ key:'', canvas:null }
+    art:emptyCache(),
+    cropCache:emptyCache()
   };
 }
 var cells = [makeCell()];
@@ -761,9 +762,16 @@ function advanceActive (idx) {
 
 /* Every artwork-cache reset goes through here — one cell, or all of them. */
 function invalidate (c) {
-  if (c) { c.art.key = ''; return; }
-  for (var i = 0; i < cells.length; i++) cells[i].art.key = '';
+  if (c) { c.art = emptyCache(); return; }
+  for (var i = 0; i < cells.length; i++) cells[i].art = emptyCache();
 }
+
+/* first empty slot among the first n, or -1 */
+function firstEmpty (n) {
+  for (var i = 0; i < n; i++) if (!cells[i].source) return i;
+  return -1;
+}
+function cap (str) { return str.charAt(0).toUpperCase() + str.slice(1); }
 
 var tool = 'select';
 var cropping = false;   /* in crop mode the active cell shows its full frame, crop applied on exit */
@@ -1220,13 +1228,8 @@ function layout () {
   };
 }
 
-function slotOf (L, idx) {
-  for (var i = 0; i < L.slots.length; i++) if (L.slots[i].idx === idx) return L.slots[i];
-  return null;
-}
-
 function paint (canvas, S, opts) {
-  var L = layout();
+  var L = (opts && opts.L) || layout();
   if (!L) return null;
 
   var OW = Math.max(1, Math.round(L.W * S));
@@ -1301,11 +1304,11 @@ function requestRender () {
 function render () {
   var L = layout();
   stage.classList.toggle('empty', !L);
-  syncOutputs();
+  syncOutputs(L);
   /* here rather than only at the mutation sites, so the crop dimensions tick
      live during a drag and the Undo/Clear buttons can never read stale */
   syncEditUI();
-  if (!L) return;
+  if (!L) { view = null; return; }
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
   var cs = getComputedStyle(stage);
@@ -1317,7 +1320,7 @@ function render () {
   var dpr = window.devicePixelRatio || 1;
 
   var S = fit * dpr;
-  paint(shot, S);
+  paint(shot, S, { L:L });
   /* floor, so a rounding overshoot can never hit max-width:100% and squash the aspect */
   var cssW = Math.floor(L.W * fit), cssH = Math.floor(L.H * fit);
   shot.style.width  = cssW + 'px';
@@ -1333,7 +1336,7 @@ function render () {
   }
   for (var j = 0; j < L.slots.length; j++) {
     var sl = L.slots[j];
-    view.slots.push({ idx:sl.idx, slot:sl, k:sl.k, C:sl.C,
+    view.slots.push({ idx:sl.idx, slot:sl,
                       ax:Math.round(sl.x * S), ay:Math.round(sl.y * S),
                       aw:Math.round(sl.iw * S), ah:Math.round(sl.ih * S) });
   }
@@ -1467,7 +1470,7 @@ function activeSlot () {
 
 function cropRectOnCanvas () {
   var r = cropOrFull(), vs = activeSlot();
-  var S = view.S * vs.k;
+  var S = view.S * vs.slot.k;
   return {
     x:Math.round(vs.ax + r.x * S), y:Math.round(vs.ay + r.y * S),
     w:Math.round(r.w * S),         h:Math.round(r.h * S)
@@ -1546,7 +1549,7 @@ function toSource (e, vs) {
 }
 
 /* how many of a cell's source px a comfortable 10 css px target is worth */
-function tolerance (vs) { vs = vs || activeSlot(); return 10 / (view.fit * (vs ? vs.k : 1)); }
+function tolerance (vs) { vs = vs || activeSlot(); return 10 / (view.fit * (vs ? vs.slot.k : 1)); }
 
 function hitHandle (e) {
   var r = cropRectOnCanvas(), pts = handlePoints(r);
@@ -1621,9 +1624,8 @@ overlay.addEventListener('pointerdown', function (e) {
      active slot, so a press on the padding still clamps to its image. */
   var idx = cellAt(e.clientX, e.clientY);
   if (idx >= 0 && !cells[idx].source) {
-    if (cropping) setTool('select');
     active = idx; selected = -1; draft = null;
-    setTool('select');
+    setTool('select');                       /* also commits an open crop */
     return;
   }
   if (idx >= 0 && idx !== active) {
@@ -1662,7 +1664,7 @@ overlay.addEventListener('pointerdown', function (e) {
   }
 
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
-  var C = activeSlot().C;
+  var C = activeSlot().slot.C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
   drag = { kind:'draw' };
@@ -1673,7 +1675,7 @@ overlay.addEventListener('pointermove', function (e) {
   var p = toSource(e);
 
   if (drag.kind === 'draw') {
-    var C = activeSlot().C;
+    var C = activeSlot().slot.C;
     draft.x2 = clamp(p.x, C.sx, C.sx + C.iw);
     draft.y2 = clamp(p.y, C.sy, C.sy + C.ih);
     if (e.shiftKey && draft.type !== 'arrow') {          /* shift = square / circle */
@@ -1753,7 +1755,7 @@ function setTool (id) {
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
   var c = cur();
-  if (cropping && !c.crop && c.source) {
+  if (cropping && !c.crop) {
     /* open with a sensible starting selection rather than nothing (history
        first — it has to record the state being replaced, not the new one) */
     pushHistory();
@@ -1783,19 +1785,16 @@ function selectCell (idx) {
 /* The overlay is aria-hidden, so the active slot and any empty slot are also
    spelled out in text: a live region announces activation changes, and the
    placeholder copy has a DOM twin while a slot is empty. */
-var lastLive = null;
+var lastLive = null, lastEmpty = null;
 function syncCellA11y () {
   var n = visibleCount(), live = '', empty = [];
   if (n > 1 && anyFilled()) {
-    var nm = slotName(active);
-    live = nm.charAt(0).toUpperCase() + nm.slice(1) + ' cell active';
-    for (var i = 0; i < n; i++) if (!cells[i].source) {
-      var en = slotName(i);
-      empty.push(en.charAt(0).toUpperCase() + en.slice(1) + ' cell: paste or drop here');
-    }
+    live = cap(slotName(active)) + ' cell active';
+    for (var i = 0; i < n; i++) if (!cells[i].source) empty.push(cap(slotName(i)) + ' cell: paste or drop here');
   }
+  var emptyText = empty.join('. ');
   if (live !== lastLive) { $('cellLive').textContent = live; lastLive = live; }
-  $('cellEmpty').textContent = empty.join('. ');
+  if (emptyText !== lastEmpty) { $('cellEmpty').textContent = emptyText; lastEmpty = emptyText; }
 }
 
 function syncEditUI () {
@@ -1814,7 +1813,7 @@ function syncEditUI () {
 function resetEditing (cell) {
   tool = 'select'; cropping = false;
   cell.crop = null; cell.shapes = [];
-  cell.cropCache = { key:'', canvas:null };
+  cell.cropCache = emptyCache();
   draft = null; selected = -1; history = [];
   var r = $('tool-select'); if (r) r.checked = true;
   syncEditUI();
@@ -1826,8 +1825,8 @@ function resetEditing (cell) {
 
 function fmt (n) { return Math.round(n).toLocaleString('en-US'); }
 
-function syncOutputs () {
-  var L = layout();
+function syncOutputs (L) {
+  if (L === undefined) L = layout();
   var padPx = L ? L.pad : null;
   var readouts = {
     padding: L ? fmt(padPx) + ' px' : state.padding.toFixed(1) + '%',
@@ -2063,13 +2062,16 @@ function syncChip () {
   $('fileName').textContent = names.join(' · ');
 }
 
+/* land a decoded image in its cell and say where it went */
+function finishLoad (cell, img, w, h, name) {
+  var into = intoSlot(cells.indexOf(cell));
+  setSource(cell, img, w, h, name);
+  toast(fmt(w) + '×' + fmt(h) + ' loaded' + into, 'ok');
+}
+
 function loadImage (blob, name, idx) {
   var cell = cells[idx === undefined ? active : idx];
-  var done = function (img, w, h) {
-    var into = intoSlot(cells.indexOf(cell));
-    setSource(cell, img, w, h, name);
-    toast(fmt(w) + '×' + fmt(h) + ' loaded' + into, 'ok');
-  };
+  var done = function (img, w, h) { finishLoad(cell, img, w, h, name); };
   var fail = function () { toast('Couldn’t decode that image.', 'err'); };
 
   if (window.createImageBitmap) {
@@ -2089,7 +2091,7 @@ function clearImage (idx) {
   if (cropping) setTool('select');
   if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
   cell.source = null; cell.rev++;
-  cell.art = { key:'', canvas:null };
+  invalidate(cell);
   resetEditing(cell);
   syncChip();
   render();
@@ -2160,11 +2162,7 @@ function loadSample () {
 
   var target = active;
   c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png', target) : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
-  function useCanvasDirect () {
-    var into = intoSlot(target);
-    setSource(cells[target], c, W, H, 'sample.png');
-    toast(fmt(W) + '×' + fmt(H) + ' loaded' + into, 'ok');
-  }
+  function useCanvasDirect () { finishLoad(cells[target], c, W, H, 'sample.png'); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2276,14 +2274,14 @@ function setLayout (id) {
 
   for (var i = n; i < cells.length; i++) {
     if (!cells[i].source) continue;
-    var j = -1;
-    for (var v = 0; v < n; v++) if (!cells[v].source) { j = v; break; }
+    var j = firstEmpty(n);
     if (j < 0) break;                          /* every visible slot is taken: park it */
     var tmp = cells[j]; cells[j] = cells[i]; cells[i] = tmp;
   }
 
   if (active >= n) active = 0;
-  for (var e = 0; e < n; e++) if (!cells[e].source) { active = e; break; }
+  var e = firstEmpty(n);
+  if (e >= 0) active = e;
 
   var radio = $('layout-' + lay.id); if (radio) radio.checked = true;
   invalidate(); syncChip(); syncEditUI(); save(); requestRender();
@@ -2449,7 +2447,7 @@ var veil = $('veil'), dragDepth = 0;
    slot itself is highlighted and the full-screen veil (which would hide the
    cells behind its blur) stays off. With nothing rendered, or a single slot,
    the veil is the drop target as before. */
-function slotTargeting () { return visibleCount() > 1 && !!layout(); }
+function slotTargeting () { return visibleCount() > 1 && anyFilled(); }
 
 function setDragHover (idx) {
   if (idx === dragHover) return;
