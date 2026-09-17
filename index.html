@@ -1308,6 +1308,7 @@ function render () {
   /* here rather than only at the mutation sites, so the crop dimensions tick
      live during a drag and the Undo/Clear buttons can never read stale */
   syncEditUI();
+  syncCellA11y();     /* also on the empty render, so stale slot text never lingers */
   if (!L) { view = null; return; }
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
@@ -1344,7 +1345,6 @@ function render () {
   overlay.style.width = cssW + 'px';
   overlay.style.height = cssH + 'px';
   overlay.width = shot.width; overlay.height = shot.height;
-  syncCellA11y();
   paintOverlay();
   overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
 }
@@ -1575,11 +1575,13 @@ function hitShape (p, vs) {
   var L = view.L, shapes = vs.slot.cell.shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
-    var tol = Math.max(tolerance(vs), strokeWidth(L, s));
+    /* p and tol are in this cell's source px; strokeWidth is in cell units */
+    var sw = strokeWidth(L, s) / vs.slot.k;
+    var tol = Math.max(tolerance(vs), sw);
     if (s.type === 'arrow') {
       /* the head is ~6× the shaft across, so a shaft-width tolerance would
          leave the most clickable part of the arrow unclickable */
-      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, strokeWidth(L, s) * 2.5)) return i;
+      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, sw * 2.5)) return i;
       continue;
     }
     var x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
