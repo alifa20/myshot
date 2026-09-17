@@ -16,6 +16,7 @@ analytics; the only URLs in the source are SVG namespace strings inside inline d
 | | |
 | --- | --- |
 | Load | drag a file anywhere on the page, `⌘V` to paste, or **Open…** / **Choose file** |
+| Two-up | **Layout → Two-up** in the Frame group puts two screenshots side by side, before and after |
 | Export | **Export PNG** or `⌘S` — saves `screenshot-<timestamp>.png` |
 | Copy | **Copy** or `⌘C` — writes a PNG to the clipboard |
 | Reset | **Reset** in the footer restores the defaults |
@@ -24,9 +25,28 @@ Every control is live — there is nothing to apply. Settings (not the image) pe
 `localStorage`, so the next session opens where you left off.
 
 **Controls** — padding, corner radius, shadow, canvas ratio (Auto · 16:9 · 4:3 · 1:1 · 2:1 for
-X/Twitter), 12 background presets (6 mesh, 3 gradient, 3 solid) plus transparent and a custom
-colour, edge definition, grain, and 1× / 2× export scale (1× — actual size — by default; every
-export is also capped at 1MB regardless of which scale is picked, see Guardrails below).
+X/Twitter), layout (single · two-up), 12 background presets (6 mesh, 3 gradient, 3 solid) plus
+transparent and a custom colour, edge definition, grain, and 1× / 2× export scale (1× — actual
+size — by default; every export is also capped at 1MB regardless of which scale is picked, see
+Guardrails below).
+
+### Two-up, for before and after
+
+Switch **Layout** to **Two-up** and the stage shows two equal-width slots on one shared background,
+before on the left, after on the right. One slot is always *active*, marked with a thin amber line:
+`⌘V`, **Open…** and **Sample** load into it, and after each load the active slot moves on to the
+next empty one, so two pastes in a row fill the pair. Dragging a file highlights the slot under the
+cursor and drops it there. Click a slot, or press `1` / `2`, to make it active; **Clear** empties the
+active slot. Each slot keeps its own crop and annotations, and `⌘Z` is one shared history.
+
+The two images are scaled to the same width — the wider one is 1:1 and the narrower one is scaled up
+to match — and padding, corner radius and shadow are measured against the shared slot, so both
+halves get identical treatment with a gutter equal to the padding. Switching back to **Single**
+keeps the left image and parks the right one in memory; switch back and it returns with its crop and
+shapes (if only the right slot was filled, it moves into the single view instead). Export and Copy
+work with one slot empty — that half is bare background and the toast says so. In two-up, 1× means
+the wider image at its native size *before* the 1MB cap; two full-screen captures side by side will
+usually be scaled down to fit under it, and the toast names that too.
 
 ### Cropping and annotating
 
@@ -45,8 +65,9 @@ Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow 
 - **Select** then click a shape to select it, `⌫` to delete. `⌘Z` undoes any edit, **Clear all**
   removes everything. Changing the colour or weight while a shape is selected retints that shape.
 
-Annotations are stored in the **source image's own pixels**, not screen coordinates, so they stay
-anchored to whatever they point at through cropping, ratio changes and either export scale — and
+Annotations are stored in the **source image's own pixels** (each slot's own, in two-up), not screen
+coordinates, so they stay anchored to whatever they point at through cropping, ratio changes, layout
+changes and either export scale — and
 they are drawn by the same `paint()` as everything else, so a 2× export renders them at full
 resolution rather than scaling up a preview. They are clipped to the artwork, so a shape dragged
 past the edge stops at the image instead of bleeding onto the background.
@@ -56,9 +77,14 @@ past the edge stops at the image instead of bleeding onto the background.
 One function paints the composition at any scale, and both the live preview and the export call it.
 They cannot drift apart, because the same code produces both.
 
-- **Composition units are the source image's own pixels.** `S` is output pixels per unit: `1` or `2`
+- **Composition units are the widest image's own pixels.** In single layout that is simply the
+  source image; in two-up each slot is scaled to that width by `k = slotWidth / imageWidth`, so the
+  wider image is 1:1 and the other is scaled up to match. `S` is output pixels per unit: `1` or `2`
   for an export, `fit × devicePixelRatio` for the preview. So the preview is Retina-crisp
-  independently of the export multiplier.
+  independently of the export multiplier, and single layout renders byte-for-byte what it did before
+  slots existed.
+- **In two-up every shadow is painted before any artwork.** A shadow's blur can spread across the
+  whole gutter, and painting it after the neighbour's image would darken that image.
 - **Nothing uses `ctx.scale()`.** Per the HTML spec `shadowBlur` and `shadowOffset*` ignore the
   current transform, so a scaled CTM would desynchronise shadows between preview and export. Every
   dimension is multiplied by `S` explicitly instead.
@@ -117,6 +143,14 @@ behave, settings survive a reload, the clipboard write succeeds, every muted tex
 WCAG AA, and the console stays clean throughout. Live preview holds ~16 ms per frame while dragging
 any slider against a 3360×2000 source. Lighthouse scores 100 on accessibility, best practices, SEO
 and agentic browsing — 48 audits, 0 failures.
+
+Two-up was verified the same way in Chrome 153 headless over CDP, 105 assertions plus a byte-for-byte
+diff of the single-layout exports against the pre-two-up build (1× and 2×, cropped and uncropped —
+identical). A 1440×900 beside a 1280×800 composes to exactly 3161×1087; a shape drawn in the scaled
+slot lands on the same feature in the preview, the 1× export and the 2× export; the crop dim, handles,
+selection, `⌫`, **Clear all** and `⌘Z` all act on the right slot; the parked slot round-trips through
+single and back with its crop; the layout survives a reload and **Reset**; and an export with an
+empty slot keeps real alpha there on a transparent background. See `docs/plan.md` §7.
 
 One known browser gap: Chrome ignores `aria-valuetext` on a native `input[type=range]`, so a screen
 reader there announces a slider's raw number rather than its px readout. The attribute is set anyway
