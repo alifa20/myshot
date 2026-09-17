@@ -692,19 +692,51 @@ var MAX_AREA = 60e6;         /* ~240 MB of RGBA — beyond this, engines start f
    ═══════════════════════════════════════════════════════════════════════ */
 
 var state = load();
-var source = null;      /* { img, w, h, name } */
-var sourceRev = 0;
 
-/* Editing state lives outside `state` on purpose: it is meaningless without the
-   image, and the image is never persisted. All coordinates below are in the
-   SOURCE image's own pixels, so a shape stays anchored to what it points at
-   through cropping, ratio changes and either export scale. */
+/* Layouts are a cols×rows grid of cells. Only the entries listed here ship;
+   the geometry below handles any grid, so a later four-up is a table row. */
+var LAYOUTS = [
+  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' }
+];
+function layoutById (id) {
+  for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
+  return null;
+}
+function activeLayout () { return layoutById(state.layout) || LAYOUTS[0]; }
+function visibleCount () { var l = activeLayout(); return l.cols * l.rows; }
+
+/* One cell per slot. The image is never persisted, and each cell's editing
+   state (crop, shapes, caches) is meaningless without its image, so all of it
+   lives here rather than in `state`. Coordinates are in the cell's own SOURCE
+   pixels, so a shape stays anchored to what it points at through cropping,
+   ratio changes, layout changes and either export scale. */
+function makeCell () {
+  return {
+    source:null,          /* { img, w, h, name } */
+    rev:0,                /* bumped on every load/clear; part of both cache keys */
+    crop:null,            /* {x,y,w,h} in source px, or null */
+    shapes:[],            /* {type,x1,y1,x2,y2,color,weight} */
+    art:{ key:'', canvas:null },
+    cropCache:{ key:'', canvas:null }
+  };
+}
+var cells = [makeCell()];
+var active = 0;
+function cur () { return cells[active]; }
+function anyFilled () {
+  for (var i = 0; i < visibleCount(); i++) if (cells[i] && cells[i].source) return true;
+  return false;
+}
+/* Every artwork-cache reset goes through here — one cell, or all of them. */
+function invalidate (c) {
+  if (c) { c.art.key = ''; return; }
+  for (var i = 0; i < cells.length; i++) cells[i].art.key = '';
+}
+
 var tool = 'select';
-var crop = null;        /* {x,y,w,h} in source px, or null */
-var cropping = false;   /* in crop mode the full frame is shown, crop applied on exit */
-var shapes = [];        /* {type,x1,y1,x2,y2,color,weight} */
-var draft = null;       /* the shape currently being dragged out */
-var selected = -1;
+var cropping = false;   /* in crop mode the active cell shows its full frame, crop applied on exit */
+var draft = null;       /* the shape currently being dragged out, in the active cell */
+var selected = -1;      /* index into the active cell's shapes */
 var history = [];
 var view = null;        /* geometry of the last preview paint, for hit-testing */
 
@@ -876,18 +908,17 @@ function drawGrain (g, W, H, S) {
 
 /* ── artwork (the rounded, clipped screenshot) ─────────────────────────── */
 
-var artCache = { key:'', canvas:null };
-var cropCache = { key:'', canvas:null };
-
-/* A cropped region is lifted out at native size once and cached, so that
-   repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
-function croppedSource (C) {
-  if (C.sx === 0 && C.sy === 0 && C.iw === source.w && C.ih === source.h) return source.img;
-  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
-  if (cropCache.key === key && cropCache.canvas) return cropCache.canvas;
+/* A cropped region is lifted out at native size once and cached per cell, so
+   that repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
+function croppedSource (cell, C) {
+  var src = cell.source;
+  if (C.sx === 0 && C.sy === 0 && C.iw === src.w && C.ih === src.h) return src.img;
+  var key = cell.rev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
+  var cc = cell.cropCache;
+  if (cc.key === key && cc.canvas) return cc.canvas;
   var c = makeCanvas(C.iw, C.ih), g = c.getContext('2d');
-  g.drawImage(source.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
-  cropCache.key = key; cropCache.canvas = c;
+  g.drawImage(src.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
+  cc.key = key; cc.canvas = c;
   return c;
 }
 
@@ -904,19 +935,21 @@ function downscaleSource (img, dw, dh) {
   return cur;
 }
 
-function getArtwork (L, S) {
+function getArtwork (cell, L, S) {
   var C = L.C;
   var aw = Math.max(1, Math.round(L.iw * S)), ah = Math.max(1, Math.round(L.ih * S));
   var r = Math.min(L.radius * S, Math.min(aw, ah) / 2);
-  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
+  var key = cell.rev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
             '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
-  if (artCache.key === key && artCache.canvas) return artCache.canvas;
+  var cache = cell.art;
+  if (cache.key === key && cache.canvas) return cache.canvas;
 
   var c = makeCanvas(aw, ah), g = c.getContext('2d');
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
 
-  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(C), aw, ah) : source.img;
-  var heavy = src !== source.img;
+  var img = cell.source.img;
+  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(cell, C), aw, ah) : img;
+  var heavy = src !== img;
 
   g.save();
   roundRectPath(g, 0, 0, aw, ah, r);
@@ -935,7 +968,7 @@ function getArtwork (L, S) {
     g.restore();
   }
 
-  artCache.key = key; artCache.canvas = c;
+  cache.key = key; cache.canvas = c;
   return c;
 }
 
@@ -1002,8 +1035,8 @@ function strokeWidth (L, shape) {
   return (shape.weight / 100) * 0.016 * Math.min(L.iw, L.ih);
 }
 
-function shapeList () {
-  return draft ? shapes.concat([draft]) : shapes;
+function shapeList (cell) {
+  return (draft && cell === cur()) ? cell.shapes.concat([draft]) : cell.shapes;
 }
 
 /* source px → output px */
@@ -1011,8 +1044,8 @@ function mapPoint (L, S, ax, ay, x, y) {
   return [ax + (x - L.C.sx) * S, ay + (y - L.C.sy) * S];
 }
 
-function drawShapes (g, L, S, ax, ay) {
-  var list = shapeList();
+function drawShapes (g, cell, L, S, ax, ay) {
+  var list = shapeList(cell);
   if (!list.length) return;
 
   for (var i = 0; i < list.length; i++) {
@@ -1090,16 +1123,18 @@ function drawArrow (g, x1, y1, x2, y2, w) {
 
 /* The visible region of the source. While cropping, the full frame is shown so
    you can see what you are excluding. */
-function content () {
-  if (!source) return null;
-  var c = (!cropping && crop) ? crop : null;
+function content (cell) {
+  if (!cell || !cell.source) return null;
+  var showFull = cropping && cell === cur();
+  var c = (!showFull && cell.crop) ? cell.crop : null;
   return c ? { sx:c.x, sy:c.y, iw:c.w, ih:c.h }
-           : { sx:0, sy:0, iw:source.w, ih:source.h };
+           : { sx:0, sy:0, iw:cell.source.w, ih:cell.source.h };
 }
 
 function layout () {
-  if (!source) return null;
-  var C = content();
+  var cell = cur();
+  if (!cell.source) return null;
+  var C = content(cell);
   var iw = C.iw, ih = C.ih;
   var pad = (state.padding / 100) * Math.max(iw, ih);
   var W = iw + pad * 2, H = ih + pad * 2;
@@ -1111,7 +1146,7 @@ function layout () {
   }
 
   return {
-    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C,
+    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C, cell:cell,
     x:(W - iw) / 2, y:(H - ih) / 2,
     radius:(state.radius / 100) * 0.06 * Math.min(iw, ih)
   };
@@ -1133,7 +1168,7 @@ function paint (canvas, S, opts) {
   drawBackground(g, OW, OH, bg);
   if (!(opts && opts.noGrain) && state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
 
-  var art = getArtwork(L, S);
+  var art = getArtwork(L.cell, L, S);
   var ax = Math.round(L.x * S), ay = Math.round(L.y * S);
   drawShadow(g, art, ax, ay, L, S);
 
@@ -1154,11 +1189,11 @@ function paint (canvas, S, opts) {
 
   /* Annotations are clipped to the artwork, so a shape dragged past the edge
      stops at the image rather than bleeding onto the background. */
-  if (shapeList().length) {
+  if (shapeList(L.cell).length) {
     g.save();
     roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
     g.clip();
-    drawShapes(g, L, S, ax, ay);
+    drawShapes(g, L.cell, L, S, ax, ay);
     g.restore();
   }
 
@@ -1256,6 +1291,7 @@ function paintOverlay () {
     return;
   }
 
+  var shapes = cur().shapes;
   if (selected >= 0 && selected < shapes.length) {
     var s = shapes[selected];
     var a = mapPoint(L, S, view.ax, view.ay, s.x1, s.y1);
@@ -1272,7 +1308,7 @@ function paintOverlay () {
 }
 
 function cropRectOnCanvas () {
-  var r = crop || { x:0, y:0, w:source.w, h:source.h };
+  var r = cropOrFull();
   var S = view.S;
   return {
     x:Math.round(view.ax + r.x * S), y:Math.round(view.ay + r.y * S),
@@ -1295,8 +1331,16 @@ function handlePoints (r) {
 var MIN_CROP = 24;
 var drag = null;
 
+/* One snapshot covers every cell, so a single shared stack walks edits made in
+   either slot in the order they happened. */
+function snapshot () {
+  return JSON.stringify({
+    cells:cells.map(function (c) { return { crop:c.crop, shapes:c.shapes }; }),
+    active:active
+  });
+}
 function pushHistory () {
-  history.push(JSON.stringify({ crop:crop, shapes:shapes }));
+  history.push(snapshot());
   if (history.length > 60) history.shift();
   syncEditUI();
 }
@@ -1304,9 +1348,17 @@ function pushHistory () {
 function undo () {
   if (!history.length) return;
   var prev = JSON.parse(history.pop());
-  crop = prev.crop; shapes = prev.shapes;
+  var changed = -1;
+  for (var i = 0; i < cells.length && i < prev.cells.length; i++) {
+    var before = JSON.stringify({ crop:cells[i].crop, shapes:cells[i].shapes });
+    var after = JSON.stringify(prev.cells[i]);
+    if (changed < 0 && before !== after) changed = i;
+    cells[i].crop = prev.cells[i].crop; cells[i].shapes = prev.cells[i].shapes;
+  }
+  /* the highlight follows the change — but only to a cell that is on screen */
+  if (changed >= 0 && changed < visibleCount()) active = changed;
   selected = -1; draft = null;
-  artCache.key = '';
+  invalidate();
   syncEditUI(); requestRender();
 }
 
@@ -1315,12 +1367,13 @@ function clamp (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 /* Crop rects are kept on whole source pixels: a fractional source rect makes
    drawImage resample the region instead of lifting it out 1:1. */
 function setCrop (x, y, w, h) {
-  x = Math.round(clamp(x, 0, source.w));
-  y = Math.round(clamp(y, 0, source.h));
-  crop = {
+  var c = cur(), src = c.source;
+  x = Math.round(clamp(x, 0, src.w));
+  y = Math.round(clamp(y, 0, src.h));
+  c.crop = {
     x:x, y:y,
-    w:Math.max(0, Math.round(Math.min(w, source.w - x))),
-    h:Math.max(0, Math.round(Math.min(h, source.h - y)))
+    w:Math.max(0, Math.round(Math.min(w, src.w - x))),
+    h:Math.max(0, Math.round(Math.min(h, src.h - y)))
   };
 }
 
@@ -1355,7 +1408,7 @@ function distToSegment (px, py, x1, y1, x2, y2) {
 
 /* Shapes are stroked outlines, so "hit" means near the outline — topmost first. */
 function hitShape (p) {
-  var L = view.L;
+  var L = view.L, shapes = cur().shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
     var tol = Math.max(tolerance(), strokeWidth(L, s));
@@ -1395,12 +1448,12 @@ overlay.addEventListener('pointerdown', function (e) {
     if (h) { drag = { kind:'crop-resize', edge:h, start:p, orig:cropOrFull() }; return; }
     /* Only an explicit selection can be dragged around. With no crop set there
        is nothing to move, so a press inside the image starts a fresh one. */
-    var c = crop;
+    var c = cur().crop;
     if (c && p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
       drag = { kind:'crop-move', start:p, orig:{ x:c.x, y:c.y, w:c.w, h:c.h } };
     } else {
       setCrop(p.x, p.y, 0, 0);
-      drag = { kind:'crop-new', start:{ x:crop.x, y:crop.y } };
+      drag = { kind:'crop-new', start:{ x:cur().crop.x, y:cur().crop.y } };
     }
     requestRender();
     return;
@@ -1437,9 +1490,10 @@ overlay.addEventListener('pointermove', function (e) {
     return;
   }
 
+  var src = cur().source;
   if (drag.kind === 'crop-new') {
-    var x1 = clamp(drag.start.x, 0, source.w), y1 = clamp(drag.start.y, 0, source.h);
-    var x2 = clamp(p.x, 0, source.w), y2 = clamp(p.y, 0, source.h);
+    var x1 = clamp(drag.start.x, 0, src.w), y1 = clamp(drag.start.y, 0, src.h);
+    var x2 = clamp(p.x, 0, src.w), y2 = clamp(p.y, 0, src.h);
     setCrop(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
     requestRender();
     return;
@@ -1447,8 +1501,8 @@ overlay.addEventListener('pointermove', function (e) {
 
   if (drag.kind === 'crop-move') {
     var o = drag.orig;
-    setCrop(clamp(o.x + (p.x - drag.start.x), 0, source.w - o.w),
-            clamp(o.y + (p.y - drag.start.y), 0, source.h - o.h), o.w, o.h);
+    setCrop(clamp(o.x + (p.x - drag.start.x), 0, src.w - o.w),
+            clamp(o.y + (p.y - drag.start.y), 0, src.h - o.h), o.w, o.h);
     requestRender();
     return;
   }
@@ -1456,10 +1510,10 @@ overlay.addEventListener('pointermove', function (e) {
   if (drag.kind === 'crop-resize') {
     var g = drag.orig, edge = drag.edge;
     var l = g.x, t = g.y, rr = g.x + g.w, bb = g.y + g.h;
-    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, source.w);
-    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, source.w);
-    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, source.h);
-    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, source.h);
+    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, src.w);
+    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, src.w);
+    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, src.h);
+    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, src.h);
     /* normalise rather than clamp against the opposite edge, so dragging a
        handle past its opposite flips the selection the way every crop tool
        does, instead of collapsing to the minimum size */
@@ -1477,16 +1531,17 @@ function endDrag () {
     var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
     if (len < tolerance()) { draft = null; requestRender(); return; }   /* a stray click */
     pushHistory();
-    shapes.push(draft);
+    cur().shapes.push(draft);
     draft = null;
     requestRender();
     return;
   }
 
   /* too small to have been meant, or the whole frame — either way, no crop */
-  if (crop && (crop.w < MIN_CROP || crop.h < MIN_CROP)) crop = null;
-  if (crop && crop.x <= 0 && crop.y <= 0 && crop.w >= source.w && crop.h >= source.h) crop = null;
-  artCache.key = '';
+  var c = cur(), cr = c.crop, src = c.source;
+  if (cr && (cr.w < MIN_CROP || cr.h < MIN_CROP)) c.crop = null;
+  if (cr && cr.x <= 0 && cr.y <= 0 && cr.w >= src.w && cr.h >= src.h) c.crop = null;
+  invalidate(c);
   syncEditUI();
   requestRender();
 }
@@ -1494,40 +1549,47 @@ overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
 
 function cropOrFull () {
-  return crop || { x:0, y:0, w:source.w, h:source.h };
+  var c = cur();
+  return c.crop || { x:0, y:0, w:c.source.w, h:c.source.h };
 }
 
 function setTool (id) {
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
-  if (cropping && !crop) {
+  var c = cur();
+  if (cropping && !c.crop && c.source) {
     /* open with a sensible starting selection rather than nothing (history
        first — it has to record the state being replaced, not the new one) */
     pushHistory();
-    setCrop(source.w * .12, source.h * .12, source.w * .76, source.h * .76);
+    var src = c.source;
+    setCrop(src.w * .12, src.h * .12, src.w * .76, src.h * .76);
   }
   if (id !== 'select') selected = -1;
   var radio = $('tool-' + id);
   if (radio) radio.checked = true;
   syncEditUI();
-  artCache.key = '';
+  invalidate(c);
   requestRender();
 }
 
 function syncEditUI () {
+  var c = cur();
   $('cropBar').hidden = !cropping;
-  if (cropping) {
-    var c = cropOrFull();
-    $('cropDims').textContent = fmt(c.w) + ' × ' + fmt(c.h);
+  if (cropping && c.source) {
+    var r = cropOrFull();
+    $('cropDims').textContent = fmt(r.w) + ' × ' + fmt(r.h);
   }
   $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
-  $('clearShapes').setAttribute('aria-disabled', (shapes.length || crop) ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop) ? 'false' : 'true');
 }
 
-function resetEditing () {
-  tool = 'select'; cropping = false; crop = null;
-  shapes = []; draft = null; selected = -1; history = [];
-  cropCache.key = ''; cropCache.canvas = null;
+/* A new image in a cell means that cell's crop and shapes are meaningless; the
+   shared editing state (tool, draft, selection, history) resets with it. */
+function resetEditing (cell) {
+  tool = 'select'; cropping = false;
+  cell.crop = null; cell.shapes = [];
+  cell.cropCache = { key:'', canvas:null };
+  draft = null; selected = -1; history = [];
   var r = $('tool-select'); if (r) r.checked = true;
   syncEditUI();
 }
@@ -1561,7 +1623,7 @@ function syncOutputs () {
                            : Math.round(state.weight) + '%';
   $('weight').setAttribute('aria-valuetext', $('weightOut').value);
 
-  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (crop && !cropping ? ' cropped' : '') : '—';
+  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (L.cell.crop && !cropping ? ' cropped' : '') : '—';
   if (L) {
     var s = exportScale(L);
     $('metaOut').textContent = fmt(L.W * s) + '×' + fmt(L.H * s) + (s !== state.scale ? ' ·' + s + '×' : '');
@@ -1685,7 +1747,7 @@ function stamp () {
 
 var lastBlobUrl = null;
 function doExport () {
-  if (!source) return;
+  if (!anyFilled()) return;
   var r;
   try { r = renderBudgeted(); }
   catch (e) { return toast(e.message, 'err'); }
@@ -1703,7 +1765,7 @@ function doExport () {
 }
 
 function doCopy () {
-  if (!source) return;
+  if (!anyFilled()) return;
 
   if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') {
     return copyFailed('This browser can’t write images to the clipboard.');
@@ -1745,16 +1807,30 @@ function acceptFile (file) {
   loadImage(file, file.name || 'pasted image');
 }
 
-function loadImage (blob, name) {
+/* The one place an image lands in a cell — the normal decode path and the
+   sample's canvas fallback both end here. */
+function setSource (cell, img, w, h, name) {
+  if (cropping) setTool('select');    /* commit an open crop before anything moves */
+  if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
+  cell.source = { img:img, w:w, h:h, name:name };
+  cell.rev++;
+  invalidate(cell);
+  resetEditing(cell);     /* a crop or an arrow means nothing against a different image */
+  syncChip();
+  render();
+}
+
+function syncChip () {
+  var names = [];
+  for (var i = 0; i < visibleCount(); i++) if (cells[i] && cells[i].source) names.push(cells[i].source.name);
+  $('fileChip').hidden = !names.length;
+  $('fileName').textContent = names.join(' · ');
+}
+
+function loadImage (blob, name, idx) {
+  var cell = cells[idx === undefined ? active : idx];
   var done = function (img, w, h) {
-    if (source && source.img && typeof source.img.close === 'function') source.img.close();
-    source = { img:img, w:w, h:h, name:name };
-    sourceRev++;
-    artCache.key = '';
-    resetEditing();     /* a crop or an arrow means nothing against a different image */
-    $('fileChip').hidden = false;
-    $('fileName').textContent = name;
-    render();
+    setSource(cell, img, w, h, name);
     toast(fmt(w) + '×' + fmt(h) + ' loaded', 'ok');
   };
   var fail = function () { toast('Couldn’t decode that image.', 'err'); };
@@ -1771,11 +1847,14 @@ function loadImage (blob, name) {
   }
 }
 
-function clearImage () {
-  if (source && source.img && typeof source.img.close === 'function') source.img.close();
-  source = null; sourceRev++; artCache.key = ''; artCache.canvas = null;
-  resetEditing();
-  $('fileChip').hidden = true;
+function clearImage (idx) {
+  var cell = cells[idx === undefined ? active : idx];
+  if (cropping) setTool('select');
+  if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
+  cell.source = null; cell.rev++;
+  cell.art = { key:'', canvas:null };
+  resetEditing(cell);
+  syncChip();
   render();
 }
 
@@ -1842,13 +1921,11 @@ function loadSample () {
   var w2 = [1032, 940, 998, 780];
   for (var q = 0; q < w2.length; q++) { roundRectPath(g, 332, 596 + q * 26, w2[q], 9, 4.5); g.fill(); }
 
-  c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png') : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
+  var target = active;
+  c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png', target) : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
   function useCanvasDirect () {
-    if (source && source.img && typeof source.img.close === 'function') source.img.close();
-    source = { img:c, w:W, h:H, name:'sample.png' };
-    sourceRev++; artCache.key = ''; resetEditing();
-    $('fileChip').hidden = false; $('fileName').textContent = 'sample.png';
-    render();
+    setSource(cells[target], c, W, H, 'sample.png');
+    toast(fmt(W) + '×' + fmt(H) + ' loaded', 'ok');
   }
 }
 
@@ -1904,6 +1981,7 @@ function buildSeg (host, name, items, current, onPick) {
       if (!input.checked) return;
       state.color = hex;
       /* retint the selected shape, so the swatch acts on what you have chosen */
+      var shapes = cur().shapes;
       if (selected >= 0 && shapes[selected]) { pushHistory(); shapes[selected].color = hex; }
       save(); requestRender();
     });
@@ -1917,22 +1995,25 @@ fillTrack($('weight'));
 $('weight').addEventListener('input', function () {
   state.weight = parseFloat($('weight').value);
   fillTrack($('weight'));
+  var shapes = cur().shapes;
   if (selected >= 0 && shapes[selected]) shapes[selected].weight = state.weight;
   save(); requestRender();
 });
 
 $('undoBtn').addEventListener('click', undo);
 $('clearShapes').addEventListener('click', function () {
-  if (!shapes.length && !crop) return;
+  var c = cur();
+  if (!c.shapes.length && !c.crop) return;
   pushHistory();
-  shapes = []; crop = null; selected = -1; cropping = false;
-  artCache.key = '';
+  c.shapes = []; c.crop = null; selected = -1; cropping = false;
+  invalidate(c);
   setTool('select');
   toast('Annotations and crop cleared', 'ok');
 });
 $('cropDone').addEventListener('click', function () { setTool('select'); });
 $('cropReset').addEventListener('click', function () {
-  pushHistory(); crop = null; artCache.key = ''; syncEditUI(); requestRender();
+  var c = cur();
+  pushHistory(); c.crop = null; invalidate(c); syncEditUI(); requestRender();
 });
 
 buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
@@ -2014,7 +2095,7 @@ function paintSwatch (cv, bg) {
   el.checked = !!state[key];
   el.addEventListener('change', function () {
     state[key] = el.checked;
-    if (key === 'edge') artCache.key = '';
+    if (key === 'edge') invalidate();
     save(); requestRender();
   });
 });
@@ -2075,7 +2156,7 @@ function syncControls () {
   var rr = document.getElementById('ratio-' + state.ratio); if (rr) rr.checked = true;
   var sr = document.getElementById('scale-' + state.scale); if (sr) sr.checked = true;
   var custom = bgById('custom'); if (custom && custom._sw) paintSwatch(custom._sw, custom);
-  artCache.key = '';
+  invalidate();
 }
 
 $('filePicker').addEventListener('change', function (e) {
@@ -2155,15 +2236,15 @@ window.addEventListener('keydown', function (e) {
       if (selected >= 0) { selected = -1; paintOverlay(); return; }
       hideToast(); return;
     }
-    if ((k === 'delete' || k === 'backspace') && selected >= 0 && shapes[selected]) {
+    if ((k === 'delete' || k === 'backspace') && selected >= 0 && cur().shapes[selected]) {
       e.preventDefault();
       pushHistory();
-      shapes.splice(selected, 1); selected = -1;
+      cur().shapes.splice(selected, 1); selected = -1;
       requestRender();
       return;
     }
     if (k === 'enter' && cropping) { e.preventDefault(); setTool('select'); return; }
-    if (source) {
+    if (anyFilled()) {
       for (var i = 0; i < TOOLS.length; i++) {
         if (TOOLS[i].key === k) { e.preventDefault(); setTool(TOOLS[i].id); return; }
       }
@@ -2180,7 +2261,7 @@ window.addEventListener('keydown', function (e) {
     if (isTyping(document.activeElement)) return;
     var sel = window.getSelection();
     if (sel && String(sel).length) return;      /* let a real text copy through */
-    if (!source) return;
+    if (!anyFilled()) return;
     e.preventDefault(); doCopy();
   }
 });
