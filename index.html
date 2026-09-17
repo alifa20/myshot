@@ -696,7 +696,8 @@ var state = load();
 /* Layouts are a cols×rows grid of cells. Only the entries listed here ship;
    the geometry below handles any grid, so a later four-up is a table row. */
 var LAYOUTS = [
-  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' }
+  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' },
+  { id:'two-up', label:'Two-up', cols:2, rows:1, hint:'Two screenshots side by side — before and after' }
 ];
 function layoutById (id) {
   for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
@@ -935,9 +936,9 @@ function downscaleSource (img, dw, dh) {
   return cur;
 }
 
-function getArtwork (cell, L, S) {
-  var C = L.C;
-  var aw = Math.max(1, Math.round(L.iw * S)), ah = Math.max(1, Math.round(L.ih * S));
+function getArtwork (slot, L, S) {
+  var cell = slot.cell, C = slot.C;
+  var aw = Math.max(1, Math.round(slot.iw * S)), ah = Math.max(1, Math.round(slot.ih * S));
   var r = Math.min(L.radius * S, Math.min(aw, ah) / 2);
   var key = cell.rev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
             '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
@@ -948,7 +949,7 @@ function getArtwork (cell, L, S) {
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
 
   var img = cell.source.img;
-  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(cell, C), aw, ah) : img;
+  var src = (aw < C.iw * 0.6) ? downscaleSource(croppedSource(cell, C), aw, ah) : img;
   var heavy = src !== img;
 
   g.save();
@@ -980,7 +981,7 @@ function getArtwork (cell, L, S) {
 function shadowLayers (L) {
   var t = state.shadow / 100;
   if (t <= 0) return [];
-  var base = Math.max(L.iw, L.ih);
+  var base = Math.max(L.cellW, L.cellH);
   var k = Math.pow(t, 0.8);
   var layers = [
     { blur: base * (0.040 + 0.100 * t), dy: base * (0.012 + 0.045 * t), a: 0.30 * k },
@@ -1031,28 +1032,29 @@ function drawShadow (g, art, ax, ay, L, S) {
    invalidates the (expensive) artwork cache.
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Weight is relative to the shared cell box, so both cells' strokes match. */
 function strokeWidth (L, shape) {
-  return (shape.weight / 100) * 0.016 * Math.min(L.iw, L.ih);
+  return (shape.weight / 100) * 0.016 * Math.min(L.cellW, L.cellH);
 }
 
 function shapeList (cell) {
   return (draft && cell === cur()) ? cell.shapes.concat([draft]) : cell.shapes;
 }
 
-/* source px → output px */
-function mapPoint (L, S, ax, ay, x, y) {
-  return [ax + (x - L.C.sx) * S, ay + (y - L.C.sy) * S];
+/* a cell's source px → output px (k scales the cell's source into cell units) */
+function mapPoint (slot, S, ax, ay, x, y) {
+  return [ax + (x - slot.C.sx) * slot.k * S, ay + (y - slot.C.sy) * slot.k * S];
 }
 
-function drawShapes (g, cell, L, S, ax, ay) {
-  var list = shapeList(cell);
+function drawShapes (g, slot, L, S, ax, ay) {
+  var cell = slot.cell, list = shapeList(cell);
   if (!list.length) return;
 
   for (var i = 0; i < list.length; i++) {
     var s = list[i];
     var w = Math.max(1, strokeWidth(L, s) * S);
-    var a = mapPoint(L, S, ax, ay, s.x1, s.y1);
-    var b = mapPoint(L, S, ax, ay, s.x2, s.y2);
+    var a = mapPoint(slot, S, ax, ay, s.x1, s.y1);
+    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
 
     g.save();
     g.strokeStyle = s.color; g.fillStyle = s.color;
@@ -1116,9 +1118,11 @@ function drawArrow (g, x1, y1, x2, y2, w) {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    4 · LAYOUT + PAINT
-   Composition units == the source image's own pixels. `S` is output pixels
-   per composition unit: 1 or 2 for export, fit×dpr for the preview. Preview
-   and export run the same code, so they cannot drift apart.
+   Composition units are "cell units": the widest filled cell's own source
+   pixels. Every filled cell is scaled to that width by k = cellW / contentW,
+   so in single layout k = 1 and a unit is a source pixel, exactly as before.
+   `S` is output pixels per unit: 1 or 2 for export, fit×dpr for the preview.
+   Preview and export run the same code, so they cannot drift apart.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* The visible region of the source. While cropping, the full frame is shown so
@@ -1132,24 +1136,61 @@ function content (cell) {
 }
 
 function layout () {
-  var cell = cur();
-  if (!cell.source) return null;
-  var C = content(cell);
-  var iw = C.iw, ih = C.ih;
-  var pad = (state.padding / 100) * Math.max(iw, ih);
-  var W = iw + pad * 2, H = ih + pad * 2;
+  var lay = activeLayout(), n = lay.cols * lay.rows;
+  var slots = [], cellW = 0;
+  for (var i = 0; i < n; i++) {
+    var C = content(cells[i]);
+    if (!C) continue;
+    slots.push({ idx:i, cell:cells[i], C:C });
+    if (C.iw > cellW) cellW = C.iw;
+  }
+  if (!slots.length) return null;
+
+  /* Equal-width cells: the widest content is 1:1, narrower content scales up
+     to match, and the cell height is the tallest scaled content. */
+  var cellH = 0;
+  for (var j = 0; j < slots.length; j++) {
+    var sl = slots[j];
+    sl.k = cellW / sl.C.iw;
+    sl.iw = sl.C.iw * sl.k; sl.ih = sl.C.ih * sl.k;
+    if (sl.ih > cellH) cellH = sl.ih;
+  }
+
+  /* Padding, radius, shadow and stroke all measure against the shared cell
+     box, so both cells carry identical treatment; the gutter is the padding. */
+  var pad = (state.padding / 100) * Math.max(cellW, cellH);
+  var gridW = lay.cols * cellW + (lay.cols - 1) * pad;
+  var gridH = lay.rows * cellH + (lay.rows - 1) * pad;
+  var W = gridW + pad * 2, H = gridH + pad * 2;
 
   var ratio = null;
-  for (var i = 0; i < RATIOS.length; i++) if (RATIOS[i].id === state.ratio) ratio = RATIOS[i].v;
+  for (var r = 0; r < RATIOS.length; r++) if (RATIOS[r].id === state.ratio) ratio = RATIOS[r].v;
   if (ratio) {
     if (W / H < ratio) W = H * ratio; else H = W / ratio;   /* grow, never crop */
   }
 
+  var gx = (W - gridW) / 2, gy = (H - gridH) / 2;
+  var rects = [];
+  for (var q = 0; q < n; q++) {
+    var col = q % lay.cols, row = Math.floor(q / lay.cols);
+    rects.push({ idx:q, x:gx + col * (cellW + pad), y:gy + row * (cellH + pad), w:cellW, h:cellH });
+  }
+  for (var t = 0; t < slots.length; t++) {
+    var st = slots[t], rc = rects[st.idx];
+    st.x = rc.x;                              /* content fills the cell width */
+    st.y = rc.y + (cellH - st.ih) / 2;        /* and sits centred vertically */
+  }
+
   return {
-    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C, cell:cell,
-    x:(W - iw) / 2, y:(H - ih) / 2,
-    radius:(state.radius / 100) * 0.06 * Math.min(iw, ih)
+    W:W, H:H, pad:pad, cellW:cellW, cellH:cellH, lay:lay,
+    slots:slots, rects:rects,
+    radius:(state.radius / 100) * 0.06 * Math.min(cellW, cellH)
   };
+}
+
+function slotOf (L, idx) {
+  for (var i = 0; i < L.slots.length; i++) if (L.slots[i].idx === idx) return L.slots[i];
+  return null;
 }
 
 function paint (canvas, S, opts) {
@@ -1168,33 +1209,44 @@ function paint (canvas, S, opts) {
   drawBackground(g, OW, OH, bg);
   if (!(opts && opts.noGrain) && state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
 
-  var art = getArtwork(L.cell, L, S);
-  var ax = Math.round(L.x * S), ay = Math.round(L.y * S);
-  drawShadow(g, art, ax, ay, L, S);
-
-  /* Outer half of the edge treatment: a light screenshot on a light background
-     has no boundary otherwise. Drawn under the artwork so only the outside
-     half of the stroke survives. */
-  if (state.edge) {
-    var lw = Math.max(1, 1.1 * S);
-    g.save();
-    g.lineWidth = lw;
-    g.strokeStyle = 'rgba(0,0,0,.10)';
-    roundRectPath(g, ax - lw / 2, ay - lw / 2, art.width + lw, art.height + lw, L.radius * S + lw / 2);
-    g.stroke();
-    g.restore();
+  var arts = [], i, sl;
+  for (i = 0; i < L.slots.length; i++) {
+    sl = L.slots[i];
+    arts.push({ slot:sl, art:getArtwork(sl, L, S), ax:Math.round(sl.x * S), ay:Math.round(sl.y * S) });
   }
 
-  g.drawImage(art, ax, ay);
+  /* Every shadow lands before any artwork: a shadow's blur can spread across
+     the whole gutter, and painting it after the neighbour's image would darken
+     that image. */
+  for (i = 0; i < arts.length; i++) drawShadow(g, arts[i].art, arts[i].ax, arts[i].ay, L, S);
 
-  /* Annotations are clipped to the artwork, so a shape dragged past the edge
-     stops at the image rather than bleeding onto the background. */
-  if (shapeList(L.cell).length) {
-    g.save();
-    roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
-    g.clip();
-    drawShapes(g, L.cell, L, S, ax, ay);
-    g.restore();
+  for (i = 0; i < arts.length; i++) {
+    var a = arts[i], art = a.art, ax = a.ax, ay = a.ay;
+
+    /* Outer half of the edge treatment: a light screenshot on a light background
+       has no boundary otherwise. Drawn under the artwork so only the outside
+       half of the stroke survives. */
+    if (state.edge) {
+      var lw = Math.max(1, 1.1 * S);
+      g.save();
+      g.lineWidth = lw;
+      g.strokeStyle = 'rgba(0,0,0,.10)';
+      roundRectPath(g, ax - lw / 2, ay - lw / 2, art.width + lw, art.height + lw, L.radius * S + lw / 2);
+      g.stroke();
+      g.restore();
+    }
+
+    g.drawImage(art, ax, ay);
+
+    /* Annotations are clipped to their own artwork, so a shape dragged past the
+       edge stops at the image rather than bleeding onto the background. */
+    if (shapeList(a.slot.cell).length) {
+      g.save();
+      roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
+      g.clip();
+      drawShapes(g, a.slot, L, S, ax, ay);
+      g.restore();
+    }
   }
 
   return { W:OW, H:OH };
@@ -1240,9 +1292,19 @@ function render () {
   shot.style.height = cssH + 'px';
   shot.classList.toggle('alpha', activeBg().kind === 'transparent');
 
-  view = { L:L, S:S, fit:fit, dpr:dpr,
-           ax:Math.round(L.x * S), ay:Math.round(L.y * S),
-           aw:Math.round(L.iw * S), ah:Math.round(L.ih * S) };
+  /* one rect per slot in canvas pixels, plus the filled slots' geometry, so
+     hit-testing and the overlay can work per cell */
+  view = { L:L, S:S, fit:fit, dpr:dpr, rects:[], slots:[] };
+  for (var i = 0; i < L.rects.length; i++) {
+    var rc = L.rects[i];
+    view.rects.push({ idx:rc.idx, x:rc.x * S, y:rc.y * S, w:rc.w * S, h:rc.h * S });
+  }
+  for (var j = 0; j < L.slots.length; j++) {
+    var sl = L.slots[j];
+    view.slots.push({ idx:sl.idx, slot:sl, k:sl.k, C:sl.C,
+                      ax:Math.round(sl.x * S), ay:Math.round(sl.y * S),
+                      aw:Math.round(sl.iw * S), ah:Math.round(sl.ih * S) });
+  }
 
   overlay.style.width = cssW + 'px';
   overlay.style.height = cssH + 'px';
@@ -1291,11 +1353,11 @@ function paintOverlay () {
     return;
   }
 
-  var shapes = cur().shapes;
-  if (selected >= 0 && selected < shapes.length) {
+  var shapes = cur().shapes, vs = activeSlot();
+  if (vs && selected >= 0 && selected < shapes.length) {
     var s = shapes[selected];
-    var a = mapPoint(L, S, view.ax, view.ay, s.x1, s.y1);
-    var b = mapPoint(L, S, view.ax, view.ay, s.x2, s.y2);
+    var a = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x1, s.y1);
+    var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
     var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
     var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
     var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
@@ -1307,12 +1369,19 @@ function paintOverlay () {
   }
 }
 
+/* the active cell's geometry in the last preview paint, or null if it is empty */
+function activeSlot () {
+  if (!view) return null;
+  for (var i = 0; i < view.slots.length; i++) if (view.slots[i].idx === active) return view.slots[i];
+  return null;
+}
+
 function cropRectOnCanvas () {
-  var r = cropOrFull();
-  var S = view.S;
+  var r = cropOrFull(), vs = activeSlot();
+  var S = view.S * vs.k;
   return {
-    x:Math.round(view.ax + r.x * S), y:Math.round(view.ay + r.y * S),
-    w:Math.round(r.w * S),           h:Math.round(r.h * S)
+    x:Math.round(vs.ax + r.x * S), y:Math.round(vs.ay + r.y * S),
+    w:Math.round(r.w * S),         h:Math.round(r.h * S)
   };
 }
 
@@ -1377,16 +1446,17 @@ function setCrop (x, y, w, h) {
   };
 }
 
-/* client coords → source-image px */
+/* client coords → the active cell's source-image px */
 function toSource (e) {
-  var r = overlay.getBoundingClientRect();
+  var r = overlay.getBoundingClientRect(), vs = activeSlot();
   var cx = (e.clientX - r.left) / view.fit;      /* → composition units */
   var cy = (e.clientY - r.top) / view.fit;
-  return { x:cx - view.L.x + view.L.C.sx, y:cy - view.L.y + view.L.C.sy };
+  var sl = vs.slot;
+  return { x:(cx - sl.x) / sl.k + sl.C.sx, y:(cy - sl.y) / sl.k + sl.C.sy };
 }
 
-/* how many source px a comfortable 10 css px target is worth right now */
-function tolerance () { return 10 / view.fit; }
+/* how many of the active cell's source px a comfortable 10 css px target is worth */
+function tolerance () { var vs = activeSlot(); return 10 / (view.fit * (vs ? vs.k : 1)); }
 
 function hitHandle (e) {
   var r = cropRectOnCanvas(), pts = handlePoints(r);
@@ -1467,7 +1537,7 @@ overlay.addEventListener('pointerdown', function (e) {
   }
 
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
-  var C = view.L.C;
+  var C = activeSlot().C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
   drag = { kind:'draw' };
@@ -1478,7 +1548,7 @@ overlay.addEventListener('pointermove', function (e) {
   var p = toSource(e);
 
   if (drag.kind === 'draw') {
-    var C = view.L.C;
+    var C = activeSlot().C;
     draft.x2 = clamp(p.x, C.sx, C.sx + C.iw);
     draft.y2 = clamp(p.y, C.sy, C.sy + C.ih);
     if (e.shiftKey && draft.type !== 'arrow') {          /* shift = square / circle */
@@ -1602,7 +1672,7 @@ function fmt (n) { return Math.round(n).toLocaleString('en-US'); }
 
 function syncOutputs () {
   var L = layout();
-  var padPx = L ? (state.padding / 100) * Math.max(L.iw, L.ih) : null;
+  var padPx = L ? L.pad : null;
   var readouts = {
     padding: L ? fmt(padPx) + ' px' : state.padding.toFixed(1) + '%',
     radius:  L ? fmt(L.radius) + ' px' : Math.round(state.radius) + '%',
@@ -1619,11 +1689,13 @@ function syncOutputs () {
     $(key).setAttribute('aria-valuetext', readouts[key]);
   }
 
-  $('weightOut').value = L ? fmt(Math.max(1, (state.weight / 100) * 0.012 * Math.min(L.iw, L.ih))) + ' px'
+  $('weightOut').value = L ? fmt(Math.max(1, strokeWidth(L, { weight:state.weight }))) + ' px'
                            : Math.round(state.weight) + '%';
   $('weight').setAttribute('aria-valuetext', $('weightOut').value);
 
-  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (L.cell.crop && !cropping ? ' cropped' : '') : '—';
+  $('metaSrc').textContent = L ? L.slots.map(function (sl) {
+    return fmt(sl.C.iw) + '×' + fmt(sl.C.ih) + (sl.cell.crop && !(cropping && sl.cell === cur()) ? ' cropped' : '');
+  }).join(' · ') : '—';
   if (L) {
     var s = exportScale(L);
     $('metaOut').textContent = fmt(L.W * s) + '×' + fmt(L.H * s) + (s !== state.scale ? ' ·' + s + '×' : '');
