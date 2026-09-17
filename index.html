@@ -509,6 +509,11 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
           <div class="field-head"><span class="field-head-label" id="ratioLbl" style="font-size:12.5px">Canvas ratio</span></div>
           <div class="seg" id="ratioSeg" role="group" aria-labelledby="ratioLbl"></div>
         </div>
+
+        <div class="field">
+          <div class="field-head"><span class="field-head-label" id="layoutLbl" style="font-size:12.5px">Layout</span></div>
+          <div class="seg" id="layoutSeg" role="group" aria-labelledby="layoutLbl"></div>
+        </div>
       </section>
 
       <section class="grp">
@@ -659,7 +664,15 @@ var RATIOS = [
   { id:'2x1',  label:'2:1',  v:2,    hint:'2:1 — X / Twitter post and link-card size' }
 ];
 
+/* Layouts are a cols×rows grid of cells. Only the entries listed here ship;
+   the layout geometry handles any grid, so a later four-up is a table row. */
+var LAYOUTS = [
+  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' },
+  { id:'two-up', label:'Two-up', cols:2, rows:1, hint:'Two screenshots side by side — before and after' }
+];
+
 var DEFAULTS = {
+  layout:  'single',
   padding: 6.5,       /* % of the image's longest edge */
   radius:  42,        /* 0-100 → % of the image's shortest edge, ×0.06 */
   shadow:  55,        /* 0-100 */
@@ -672,6 +685,9 @@ var DEFAULTS = {
   color:   '#FF453A',   /* annotation colour */
   weight:  46           /* 10-100 → % of the shortest edge, ×0.016 */
 };
+/* Reset restores the look, not the workspace: the layout is where the user is
+   working, so it stays put. */
+var RESET_SKIP = ['layout'];
 
 var TOOLS = [
   { id:'select',  label:'Select',  key:'v', svg:'<path d="M4.5 2.2 12.6 8.4l-4.1.5-1.9 4z"/>' },
@@ -693,12 +709,6 @@ var MAX_AREA = 60e6;         /* ~240 MB of RGBA — beyond this, engines start f
 
 var state = load();
 
-/* Layouts are a cols×rows grid of cells. Only the entries listed here ship;
-   the geometry below handles any grid, so a later four-up is a table row. */
-var LAYOUTS = [
-  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' },
-  { id:'two-up', label:'Two-up', cols:2, rows:1, hint:'Two screenshots side by side — before and after' }
-];
 function layoutById (id) {
   for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
   return null;
@@ -753,6 +763,7 @@ function load () {
   } catch (e) { /* private mode / disabled storage — defaults are fine */ }
   if (!bgById(s.bg)) s.bg = DEFAULTS.bg;
   if (!RATIOS.some(function (r) { return r.id === s.ratio; })) s.ratio = DEFAULTS.ratio;
+  if (!LAYOUTS.some(function (l) { return l.id === s.layout; })) s.layout = DEFAULTS.layout;
   if (s.scale !== 1 && s.scale !== 2) s.scale = DEFAULTS.scale;
   if (!/^#[0-9a-f]{6}$/i.test(s.custom)) s.custom = DEFAULTS.custom;
   return s;
@@ -2092,6 +2103,39 @@ buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
   state.ratio = id; save(); requestRender();
 });
 
+/* Switching layouts never loses an image: a slot that drops off screen is
+   parked in memory and comes back with its crop and shapes when the layout
+   grows again. The one exception is promotion — if the only filled slot would
+   be hidden while a visible slot is empty, it moves into that slot instead of
+   vanishing. History is cleared, as a load clears it: snapshots are keyed by
+   slot index and would otherwise rewrite hidden or moved cells. */
+function setLayout (id) {
+  var lay = layoutById(id);
+  if (!lay || lay.id === state.layout) return;
+  if (cropping) setTool('select');           /* commit an open crop first */
+  drag = null; draft = null; selected = -1; history = [];
+
+  state.layout = lay.id;
+  var n = lay.cols * lay.rows;
+  while (cells.length < n) cells.push(makeCell());
+
+  for (var i = n; i < cells.length; i++) {
+    if (!cells[i].source) continue;
+    var j = -1;
+    for (var v = 0; v < n; v++) if (!cells[v].source) { j = v; break; }
+    if (j < 0) break;                          /* every visible slot is taken: park it */
+    var tmp = cells[j]; cells[j] = cells[i]; cells[i] = tmp;
+  }
+
+  if (active >= n) active = 0;
+  for (var e = 0; e < n; e++) if (!cells[e].source) { active = e; break; }
+
+  var radio = $('layout-' + lay.id); if (radio) radio.checked = true;
+  invalidate(); syncChip(); syncEditUI(); save(); requestRender();
+}
+
+buildSeg($('layoutSeg'), 'layout', LAYOUTS, state.layout, setLayout);
+
 buildSeg($('scaleSeg'), 'scale', [{ id:'1', label:'1× — actual size' }, { id:'2', label:'2× — retina' }], String(state.scale), function (id) {
   state.scale = parseInt(id, 10); save(); syncOutputs();
 });
@@ -2209,7 +2253,7 @@ $('exportBtn').addEventListener('click', doExport);
 $('copyBtn').addEventListener('click', doCopy);
 
 $('resetBtn').addEventListener('click', function () {
-  for (var k in DEFAULTS) state[k] = DEFAULTS[k];
+  for (var k in DEFAULTS) if (RESET_SKIP.indexOf(k) < 0) state[k] = DEFAULTS[k];
   syncControls();
   save(); requestRender();
   toast('Controls reset', 'ok');
@@ -2227,6 +2271,7 @@ function syncControls () {
   if (bgRadio) bgRadio.checked = true;
   var rr = document.getElementById('ratio-' + state.ratio); if (rr) rr.checked = true;
   var sr = document.getElementById('scale-' + state.scale); if (sr) sr.checked = true;
+  var lr = document.getElementById('layout-' + state.layout); if (lr) lr.checked = true;
   var custom = bgById('custom'); if (custom && custom._sw) paintSwatch(custom._sw, custom);
   invalidate();
 }
