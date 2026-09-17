@@ -1946,10 +1946,18 @@ function renderBudgeted () {
     guard++;
   }
 
+  /* an empty slot exports as bare background; the toast says which */
+  var emptySlots = [];
+  for (var i = 0; i < visibleCount(); i++) if (!cells[i].source) emptySlots.push(slotName(i));
+
   return {
     canvas:canvas, blob:dataUrlToBlob(url), W:canvas.width, H:canvas.height, bytes:bytes,
-    engineFallback:engineFallback, grainDropped:grainDropped, shrunk:shrunk
+    engineFallback:engineFallback, grainDropped:grainDropped, shrunk:shrunk, emptySlots:emptySlots
   };
+}
+
+function exportWarns (r) {
+  return r.engineFallback || r.grainDropped || r.shrunk || r.emptySlots.length > 0;
 }
 
 function fmtBytes (n) {
@@ -1958,6 +1966,7 @@ function fmtBytes (n) {
 
 function budgetNote (r) {
   var bits = [];
+  if (r.emptySlots.length) bits.push(r.emptySlots.join(' and ') + ' slot empty');
   if (r.engineFallback) bits.push('fell back to 1× — 2× exceeds this browser’s canvas limit');
   if (r.grainDropped || r.shrunk) {
     var why = [];
@@ -1987,8 +1996,7 @@ function doExport () {
   a.download = 'screenshot-' + stamp() + '.png';
   document.body.appendChild(a); a.click(); a.remove();
 
-  var warn = r.engineFallback || r.grainDropped || r.shrunk;
-  toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
+  toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG, ' + fmtBytes(r.bytes) + budgetNote(r), exportWarns(r) ? 'warn' : 'ok');
   setTimeout(function () { if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; } }, 60000);
 }
 
@@ -2011,8 +2019,7 @@ function doCopy () {
   catch (e) { return copyFailed('Clipboard rejected the image.'); }
 
   navigator.clipboard.write([item]).then(function () {
-    var warn = r.engineFallback || r.grainDropped || r.shrunk;
-    toast('Copied to clipboard, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
+    toast('Copied to clipboard, ' + fmtBytes(r.bytes) + budgetNote(r), exportWarns(r) ? 'warn' : 'ok');
   }).catch(function (err) {
     var why = !window.isSecureContext
       ? 'The clipboard needs a secure context — this page is on file://.'
@@ -2284,7 +2291,10 @@ function setLayout (id) {
 
 buildSeg($('layoutSeg'), 'layout', LAYOUTS, state.layout, setLayout);
 
-buildSeg($('scaleSeg'), 'scale', [{ id:'1', label:'1× — actual size' }, { id:'2', label:'2× — retina' }], String(state.scale), function (id) {
+buildSeg($('scaleSeg'), 'scale', [
+  { id:'1', label:'1× — actual size', hint:'1× — the largest image at its native size, before the 1MB cap' },
+  { id:'2', label:'2× — retina',      hint:'2× — double resolution, before the 1MB cap' }
+], String(state.scale), function (id) {
   state.scale = parseInt(id, 10); save(); syncOutputs();
 });
 
