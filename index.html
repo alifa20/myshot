@@ -137,6 +137,8 @@ button{cursor:pointer;border:none;background:none;padding:0}
   background-size:18px 18px;background-position:0 0,9px 9px;
 }
 .stage.empty #shot{display:none}
+/* screen-reader text for canvas-only state (active slot, empty-slot placeholders) */
+.vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* empty state */
 .empty-ui{display:none;text-align:center;max-width:420px}
@@ -440,6 +442,8 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
       <canvas id="shot" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
       <canvas id="overlay" aria-hidden="true"></canvas>
     </div>
+    <p class="vh" id="cellLive" aria-live="polite"></p>
+    <p class="vh" id="cellEmpty"></p>
 
     <div class="empty-ui" id="emptyUI">
       <div class="glyph" aria-hidden="true"></div>
@@ -1337,6 +1341,7 @@ function render () {
   overlay.style.width = cssW + 'px';
   overlay.style.height = cssH + 'px';
   overlay.width = shot.width; overlay.height = shot.height;
+  syncCellA11y();
   paintOverlay();
   overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
 }
@@ -1350,6 +1355,37 @@ function paintOverlay () {
   var g = overlay.getContext('2d');
   g.clearRect(0, 0, overlay.width, overlay.height);
   var S = view.S, L = view.L;
+
+  if (!cropping && visibleCount() > 1) {
+    var u0 = view.dpr;
+    for (var ri = 0; ri < view.rects.length; ri++) {
+      var rr = view.rects[ri], filled = !!(cells[rr.idx] && cells[rr.idx].source);
+      if (!filled) {
+        /* dashed placeholder, drawn dark-then-light like the crop guides */
+        var ins = Math.max(8 * u0, rr.w * 0.04);
+        g.save();
+        g.setLineDash([10 * u0, 8 * u0]);
+        g.lineWidth = 3 * u0; g.strokeStyle = 'rgba(0,0,0,.35)';
+        roundRectPath(g, rr.x + ins, rr.y + ins, rr.w - ins * 2, rr.h - ins * 2, 12 * u0); g.stroke();
+        g.lineWidth = 1.25 * u0; g.strokeStyle = 'rgba(255,255,255,.55)';
+        roundRectPath(g, rr.x + ins, rr.y + ins, rr.w - ins * 2, rr.h - ins * 2, 12 * u0); g.stroke();
+        g.setLineDash([]);
+        var fs = Math.max(11, Math.min(15, rr.w / 28)) * u0;
+        g.font = '500 ' + fs + 'px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillStyle = 'rgba(0,0,0,.45)'; g.fillText('Paste or drop here', rr.x + rr.w / 2, rr.y + rr.h / 2 + 1.5 * u0);
+        g.fillStyle = 'rgba(255,255,255,.85)'; g.fillText('Paste or drop here', rr.x + rr.w / 2, rr.y + rr.h / 2);
+        g.restore();
+      }
+      if (rr.idx === active && dragHover < 0) {
+        /* the active slot: a solid amber hairline, distinct from the dashed drop target */
+        g.save();
+        g.lineWidth = 1.5 * u0; g.strokeStyle = 'rgba(232,160,92,.9)';
+        g.strokeRect(rr.x + 0.75 * u0, rr.y + 0.75 * u0, rr.w - 1.5 * u0, rr.h - 1.5 * u0);
+        g.restore();
+      }
+    }
+  }
 
   if (dragHover >= 0 && dragHover < view.rects.length) {
     var dr = view.rects[dragHover], du = view.dpr, inset = 3 * du;
@@ -1499,17 +1535,18 @@ function setCrop (x, y, w, h) {
   };
 }
 
-/* client coords → the active cell's source-image px */
-function toSource (e) {
-  var r = overlay.getBoundingClientRect(), vs = activeSlot();
+/* client coords → a cell's source-image px (the active cell unless given) */
+function toSource (e, vs) {
+  vs = vs || activeSlot();
+  var r = overlay.getBoundingClientRect();
   var cx = (e.clientX - r.left) / view.fit;      /* → composition units */
   var cy = (e.clientY - r.top) / view.fit;
   var sl = vs.slot;
   return { x:(cx - sl.x) / sl.k + sl.C.sx, y:(cy - sl.y) / sl.k + sl.C.sy };
 }
 
-/* how many of the active cell's source px a comfortable 10 css px target is worth */
-function tolerance () { var vs = activeSlot(); return 10 / (view.fit * (vs ? vs.k : 1)); }
+/* how many of a cell's source px a comfortable 10 css px target is worth */
+function tolerance (vs) { vs = vs || activeSlot(); return 10 / (view.fit * (vs ? vs.k : 1)); }
 
 function hitHandle (e) {
   var r = cropRectOnCanvas(), pts = handlePoints(r);
@@ -1530,11 +1567,12 @@ function distToSegment (px, py, x1, y1, x2, y2) {
 }
 
 /* Shapes are stroked outlines, so "hit" means near the outline — topmost first. */
-function hitShape (p) {
-  var L = view.L, shapes = cur().shapes;
+function hitShape (p, vs) {
+  vs = vs || activeSlot();
+  var L = view.L, shapes = vs.slot.cell.shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
-    var tol = Math.max(tolerance(), strokeWidth(L, s));
+    var tol = Math.max(tolerance(vs), strokeWidth(L, s));
     if (s.type === 'arrow') {
       /* the head is ~6× the shaft across, so a shaft-width tolerance would
          leave the most clickable part of the arrow unclickable */
@@ -1560,8 +1598,40 @@ function hitShape (p) {
   return -1;
 }
 
+/* A Select press that misses the active cell's shapes still finds a shape in
+   another cell: that cell becomes active, then the shape is selected. */
+function hitShapeAny (e) {
+  var vs = activeSlot();
+  if (vs) { var i = hitShape(toSource(e, vs), vs); if (i >= 0) return { idx:active, i:i }; }
+  for (var j = 0; j < view.slots.length; j++) {
+    var o = view.slots[j];
+    if (o.idx === active) continue;
+    var k = hitShape(toSource(e, o), o);
+    if (k >= 0) return { idx:o.idx, i:k };
+  }
+  return null;
+}
+
 overlay.addEventListener('pointerdown', function (e) {
-  if (!view || e.button !== 0 || !activeSlot()) return;
+  if (!view || e.button !== 0) return;
+
+  /* which slot was pressed: an empty one only becomes active (and drops to
+     Select — there is nothing to crop or draw on); a filled one becomes
+     active and the gesture continues in it; the background belongs to the
+     active slot, so a press on the padding still clamps to its image. */
+  var idx = cellAt(e.clientX, e.clientY);
+  if (idx >= 0 && !cells[idx].source) {
+    if (cropping) setTool('select');
+    active = idx; selected = -1; draft = null;
+    setTool('select');
+    return;
+  }
+  if (idx >= 0 && idx !== active) {
+    if (cropping) selectCell(idx);
+    else { active = idx; selected = -1; draft = null; requestRender(); }
+  }
+  if (!activeSlot()) return;
+
   overlay.setPointerCapture(e.pointerId);
   var p = toSource(e);
 
@@ -1583,7 +1653,9 @@ overlay.addEventListener('pointerdown', function (e) {
   }
 
   if (tool === 'select') {
-    selected = hitShape(p);
+    var hit = hitShapeAny(e);
+    if (hit && hit.idx !== active) { active = hit.idx; requestRender(); }
+    selected = hit ? hit.i : -1;
     paintOverlay();
     syncEditUI();
     return;
@@ -1677,6 +1749,7 @@ function cropOrFull () {
 }
 
 function setTool (id) {
+  if (id === 'crop' && !cur().source) id = 'select';   /* nothing to crop in an empty slot */
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
   var c = cur();
@@ -1705,6 +1778,24 @@ function selectCell (idx) {
   if (idx !== active) { active = idx; selected = -1; draft = null; }
   if (wasCropping && cells[idx].source) setTool('crop');
   syncEditUI(); requestRender();
+}
+
+/* The overlay is aria-hidden, so the active slot and any empty slot are also
+   spelled out in text: a live region announces activation changes, and the
+   placeholder copy has a DOM twin while a slot is empty. */
+var lastLive = null;
+function syncCellA11y () {
+  var n = visibleCount(), live = '', empty = [];
+  if (n > 1 && anyFilled()) {
+    var nm = slotName(active);
+    live = nm.charAt(0).toUpperCase() + nm.slice(1) + ' cell active';
+    for (var i = 0; i < n; i++) if (!cells[i].source) {
+      var en = slotName(i);
+      empty.push(en.charAt(0).toUpperCase() + en.slice(1) + ' cell: paste or drop here');
+    }
+  }
+  if (live !== lastLive) { $('cellLive').textContent = live; lastLive = live; }
+  $('cellEmpty').textContent = empty.join('. ');
 }
 
 function syncEditUI () {
