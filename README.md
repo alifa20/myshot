@@ -144,7 +144,7 @@ WCAG AA, and the console stays clean throughout. Live preview holds ~16 ms per f
 any slider against a 3360×2000 source. Lighthouse scores 100 on accessibility, best practices, SEO
 and agentic browsing — 48 audits, 0 failures.
 
-Two-up was verified the same way in Chrome 153 headless over CDP, 105 assertions plus a byte-for-byte
+Two-up was verified the same way in Chrome 153 headless over CDP, 119 assertions plus a byte-for-byte
 diff of the single-layout exports against the pre-two-up build (1× and 2×, cropped and uncropped —
 identical). A 1440×900 beside a 1280×800 composes to exactly 3161×1087; a shape drawn in the scaled
 slot lands on the same feature in the preview, the 1× export and the 2× export; the crop dim, handles,

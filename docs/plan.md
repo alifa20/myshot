@@ -275,7 +275,7 @@ any load it advances to the next empty visible slot.
 **Verification** — Chrome 153 headless, driven over CDP by a dependency-free Node script (built-in
 `WebSocket`): real mouse and key events, paste and drop synthesised with `File` + `DataTransfer`, exports
 downloaded to disk and read back through `createImageBitmap`, pixels asserted rather than DOM state.
-105 assertions across five suites, plus a byte-for-byte diff of five single-layout reference captures
+119 assertions across five suites, plus a byte-for-byte diff of five single-layout reference captures
 (sample 1× 1627×1087, 2× 3254×2174, cropped-with-arrow-and-box 1× 1236×826 and 2× 2472×1652, and
 the preview canvas) against the pre-two-up build — **identical after every unit**. Console clean and
 zero network requests throughout.
@@ -318,6 +318,13 @@ zero network requests throughout.
    active hairline is always on the overlay, so "no ink after drop" became "no more ink than idle".
 4. The harness's own `getImageData` readbacks tripped the console-clean check; it now reads through a
    scratch canvas flagged `willReadFrequently`, so a warning in that check is the app's, never the tool's.
+5. Found by the adversarial code review after the PR opened: with `layout: 'two-up'` restored from
+   `localStorage`, `cells` booted as a one-element array, so the first paste on a reloaded two-up stage
+   threw inside the auto-advance loop. `ensureCells(visibleCount())` now runs at boot and on every switch.
+   Three gesture-ordering defects came with it: a press on the other slot while cropping is now a pure
+   slot switch (it used to fall through into the crop branch against pre-switch geometry), a digit key or
+   `⌘Z` during an in-flight drag is ignored (it nulled `draft` under the pointer), and an undo that changes
+   the other cell closes an open crop session before moving the highlight. Each has a scenario in the suite.
 
 **Observed, not changed.** Two full-size slots routinely exceed the 1MB cap: a 1440×900 beside an
 empty slot exported at 1860×640 (952 KB, grain dropped and scaled down), and with both slots filled the
