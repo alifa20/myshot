@@ -584,7 +584,7 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
 </div>
 
 <div class="veil" id="veil" aria-hidden="true">
-  <div class="frame"><strong>Drop it anywhere</strong><span>The new screenshot replaces the current one</span></div>
+  <div class="frame"><strong>Drop it anywhere</strong><span id="veilSub">The new screenshot replaces the current one</span></div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite">
@@ -738,6 +738,23 @@ function anyFilled () {
   for (var i = 0; i < visibleCount(); i++) if (cells[i] && cells[i].source) return true;
   return false;
 }
+/* "left" / "right" in two-up; nothing in single layout, where there is no slot to name */
+function slotName (idx) {
+  var lay = activeLayout();
+  if (lay.cols * lay.rows === 1) return '';
+  if (lay.rows === 1) return ['left', 'right', 'third', 'fourth'][idx] || ('slot ' + (idx + 1));
+  return ['top-left', 'top-right', 'bottom-left', 'bottom-right'][idx] || ('slot ' + (idx + 1));
+}
+function intoSlot (idx) { var n = slotName(idx); return n ? ' into ' + n : ''; }
+
+/* After a load lands in slot `idx`, the active slot moves on to the next empty
+   visible one so a second paste fills the pair — or stays put if none is empty. */
+function advanceActive (idx) {
+  var n = visibleCount();
+  for (var i = 1; i < n; i++) { var j = (idx + i) % n; if (!cells[j].source) { active = j; return; } }
+  active = idx;
+}
+
 /* Every artwork-cache reset goes through here — one cell, or all of them. */
 function invalidate (c) {
   if (c) { c.art.key = ''; return; }
@@ -1326,13 +1343,26 @@ function render () {
 
 /* ── overlay: crop frame + selection chrome (never exported) ───────────── */
 
+var dragHover = -1;      /* slot under a file being dragged over the stage, or -1 */
+
 function paintOverlay () {
   if (!view) return;
   var g = overlay.getContext('2d');
   g.clearRect(0, 0, overlay.width, overlay.height);
   var S = view.S, L = view.L;
 
-  if (cropping) {
+  if (dragHover >= 0 && dragHover < view.rects.length) {
+    var dr = view.rects[dragHover], du = view.dpr, inset = 3 * du;
+    g.save();
+    g.fillStyle = 'rgba(232,160,92,.12)';
+    g.fillRect(dr.x, dr.y, dr.w, dr.h);
+    g.strokeStyle = 'rgba(232,160,92,.95)'; g.lineWidth = 2 * du;
+    g.setLineDash([8 * du, 6 * du]);
+    g.strokeRect(dr.x + inset, dr.y + inset, dr.w - inset * 2, dr.h - inset * 2);
+    g.restore();
+  }
+
+  if (cropping && activeSlot()) {
     var r = cropRectOnCanvas();
     g.fillStyle = 'rgba(6,6,8,.58)';
     g.fillRect(0, 0, overlay.width, overlay.height);
@@ -1378,6 +1408,18 @@ function paintOverlay () {
     g.strokeRect(x, y, w, h);
     g.setLineDash([]);
   }
+}
+
+/* which visible slot a client point is over, or -1 */
+function cellAt (clientX, clientY) {
+  if (!view) return -1;
+  var r = overlay.getBoundingClientRect();
+  var px = (clientX - r.left) * view.dpr, py = (clientY - r.top) * view.dpr;
+  for (var i = 0; i < view.rects.length; i++) {
+    var c = view.rects[i];
+    if (px >= c.x && px <= c.x + c.w && py >= c.y && py <= c.y + c.h) return c.idx;
+  }
+  return -1;
 }
 
 /* the active cell's geometry in the last preview paint, or null if it is empty */
@@ -1519,7 +1561,7 @@ function hitShape (p) {
 }
 
 overlay.addEventListener('pointerdown', function (e) {
-  if (!view || e.button !== 0) return;
+  if (!view || e.button !== 0 || !activeSlot()) return;
   overlay.setPointerCapture(e.pointerId);
   var p = toSource(e);
 
@@ -1651,6 +1693,18 @@ function setTool (id) {
   syncEditUI();
   invalidate(c);
   requestRender();
+}
+
+/* Make a slot the active one. An open crop is committed first (as Enter
+   would), then re-opened on the target if it holds an image; an empty target
+   drops to Select, since there is nothing to crop. */
+function selectCell (idx) {
+  if (idx < 0 || idx >= visibleCount() || !cells[idx]) return;
+  var wasCropping = cropping;
+  if (cropping) setTool('select');
+  if (idx !== active) { active = idx; selected = -1; draft = null; }
+  if (wasCropping && cells[idx].source) setTool('crop');
+  syncEditUI(); requestRender();
 }
 
 function syncEditUI () {
@@ -1884,10 +1938,10 @@ function copyFailed (why) {
    8 · IMAGE INPUT
    ═══════════════════════════════════════════════════════════════════════ */
 
-function acceptFile (file) {
+function acceptFile (file, idx) {
   if (!file) return;
   if (file.type && file.type.indexOf('image/') !== 0) return toast('That’s not an image file.', 'err');
-  loadImage(file, file.name || 'pasted image');
+  loadImage(file, file.name || 'pasted image', idx);
 }
 
 /* The one place an image lands in a cell — the normal decode path and the
@@ -1899,6 +1953,7 @@ function setSource (cell, img, w, h, name) {
   cell.rev++;
   invalidate(cell);
   resetEditing(cell);     /* a crop or an arrow means nothing against a different image */
+  advanceActive(cells.indexOf(cell));
   syncChip();
   render();
 }
@@ -1913,8 +1968,9 @@ function syncChip () {
 function loadImage (blob, name, idx) {
   var cell = cells[idx === undefined ? active : idx];
   var done = function (img, w, h) {
+    var into = intoSlot(cells.indexOf(cell));
     setSource(cell, img, w, h, name);
-    toast(fmt(w) + '×' + fmt(h) + ' loaded', 'ok');
+    toast(fmt(w) + '×' + fmt(h) + ' loaded' + into, 'ok');
   };
   var fail = function () { toast('Couldn’t decode that image.', 'err'); };
 
@@ -2007,8 +2063,9 @@ function loadSample () {
   var target = active;
   c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png', target) : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
   function useCanvasDirect () {
+    var into = intoSlot(target);
     setSource(cells[target], c, W, H, 'sample.png');
-    toast(fmt(W) + '×' + fmt(H) + ' loaded', 'ok');
+    toast(fmt(W) + '×' + fmt(H) + ' loaded' + into, 'ok');
   }
 }
 
@@ -2248,7 +2305,7 @@ $('pickBtn').addEventListener('click', function () { $('filePicker').click(); })
 $('pickBtn2').addEventListener('click', function () { $('filePicker').click(); });
 $('sampleBtn').addEventListener('click', loadSample);
 $('sampleBtn2').addEventListener('click', loadSample);
-$('clearBtn').addEventListener('click', clearImage);
+$('clearBtn').addEventListener('click', function () { clearImage(); });   /* not bound directly: the event would be read as a slot index */
 $('exportBtn').addEventListener('click', doExport);
 $('copyBtn').addEventListener('click', doCopy);
 
@@ -2287,23 +2344,41 @@ $('filePicker').addEventListener('change', function (e) {
 
 var veil = $('veil'), dragDepth = 0;
 
+/* With cells on screen the file lands in the slot under the cursor, so the
+   slot itself is highlighted and the full-screen veil (which would hide the
+   cells behind its blur) stays off. With nothing rendered, or a single slot,
+   the veil is the drop target as before. */
+function slotTargeting () { return visibleCount() > 1 && !!layout(); }
+
+function setDragHover (idx) {
+  if (idx === dragHover) return;
+  dragHover = idx;
+  paintOverlay();
+}
+
 window.addEventListener('dragenter', function (e) {
   if (!hasFiles(e)) return;
-  e.preventDefault(); dragDepth++; veil.classList.add('on');
+  e.preventDefault(); dragDepth++;
+  if (slotTargeting()) { setDragHover(cellAt(e.clientX, e.clientY)); return; }
+  $('veilSub').textContent = visibleCount() > 1 ? 'It fills the first empty slot' : 'The new screenshot replaces the current one';
+  veil.classList.add('on');
 });
 window.addEventListener('dragover', function (e) {
   if (!hasFiles(e)) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  if (slotTargeting()) setDragHover(cellAt(e.clientX, e.clientY));
 });
 window.addEventListener('dragleave', function (e) {
   if (!hasFiles(e)) return;
   dragDepth = Math.max(0, dragDepth - 1);
-  if (!dragDepth) veil.classList.remove('on');
+  if (!dragDepth) { veil.classList.remove('on'); setDragHover(-1); }
 });
 window.addEventListener('drop', function (e) {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; veil.classList.remove('on');
+  var target = slotTargeting() ? cellAt(e.clientX, e.clientY) : -1;
+  setDragHover(-1);
   var dt = e.dataTransfer;
   if (!dt) return;
   var file = null;
@@ -2313,7 +2388,7 @@ window.addEventListener('drop', function (e) {
     }
   }
   if (!file && dt.files && dt.files.length) file = dt.files[0];
-  acceptFile(file);
+  acceptFile(file, target >= 0 ? target : active);   /* off every slot → the active one */
 });
 
 function hasFiles (e) {
@@ -2361,6 +2436,11 @@ window.addEventListener('keydown', function (e) {
       return;
     }
     if (k === 'enter' && cropping) { e.preventDefault(); setTool('select'); return; }
+    if (k >= '1' && k <= '4') {
+      var slot = parseInt(k, 10) - 1;
+      if (slot < visibleCount() && anyFilled()) { e.preventDefault(); selectCell(slot); }
+      return;
+    }
     if (anyFilled()) {
       for (var i = 0; i < TOOLS.length; i++) {
         if (TOOLS[i].key === k) { e.preventDefault(); setTool(TOOLS[i].id); return; }
