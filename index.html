@@ -122,6 +122,14 @@ button{cursor:pointer;border:none;background:none;padding:0}
 
 .shotwrap{position:relative;max-width:100%;max-height:100%;display:grid;place-items:center;min-width:0;min-height:0}
 #overlay{position:absolute;left:0;top:0;touch-action:none}
+/* the label editor: a real text field floated over the preview, styled as the
+   pill it will become (size, padding, colour are set per frame by the app) */
+.label-edit{
+  position:absolute;z-index:3;margin:0;border:0;white-space:nowrap;
+  font-weight:600;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.45);caret-color:currentColor;
+}
+.label-edit:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .stage.empty #overlay{display:none}
 #shot{
   display:block;max-width:100%;max-height:100%;
@@ -1148,6 +1156,7 @@ function drawShapes (g, slot, L, S, ax, ay) {
 
   for (var i = 0; i < list.length; i++) {
     var s = list[i];
+    if (editing(cell, i)) continue;              /* the field stands in for it while it is edited */
     var w = Math.max(1, strokeWidth(L, s) * S);
     var a = mapPoint(slot, S, ax, ay, s.x1, s.y1);
 
@@ -1380,7 +1389,7 @@ function render () {
      live during a drag and the Undo/Clear buttons can never read stale */
   syncEditUI();
   syncCellA11y();     /* also on the empty render, so stale slot text never lingers */
-  if (!L) { view = null; return; }
+  if (!L) { view = null; if (editor) closeEditor(false); return; }
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
   var cs = getComputedStyle(stage);
@@ -1417,6 +1426,7 @@ function render () {
   overlay.style.height = cssH + 'px';
   overlay.width = shot.width; overlay.height = shot.height;
   paintOverlay();
+  positionEditor();           /* the field tracks its anchor through fit and dpr changes */
   overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : tool === 'text' ? 'text' : 'crosshair');
 }
 
@@ -1505,7 +1515,7 @@ function paintOverlay () {
   }
 
   var shapes = cur().shapes, vs = activeSlot();
-  if (vs && selected >= 0 && selected < shapes.length) {
+  if (vs && selected >= 0 && selected < shapes.length && !editing(cur(), selected)) {
     var s = shapes[selected];
     var a = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x1, s.y1);
     var x, y, w, h;
@@ -1705,7 +1715,9 @@ function hitShapeAny (e) {
 }
 
 overlay.addEventListener('pointerdown', function (e) {
-  if (!view || e.button !== 0) return;
+  if (!view) return;
+  closeEditor(true);      /* before any branch: the pointer event precedes the focus change, so blur cannot be relied on to commit first */
+  if (e.button !== 0) return;
 
   /* which slot was pressed: an empty one only becomes active (and drops to
      Select — there is nothing to crop or draw on); a filled one becomes
@@ -1755,7 +1767,11 @@ overlay.addEventListener('pointerdown', function (e) {
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
   var C = activeSlot().slot.C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
-  if (tool === 'text') return;                 /* labels are placed through the editor (next unit) */
+  if (tool === 'text') {
+    /* the editor opens on release (endDrag), at the press point */
+    drag = { kind:'text', at:{ x:sx, y:sy }, start:p, stray:false };
+    return;
+  }
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
 
   drag = { kind:'draw' };
@@ -1775,6 +1791,11 @@ overlay.addEventListener('pointermove', function (e) {
       draft.y2 = draft.y1 + Math.sign(draft.y2 - draft.y1 || 1) * side;
     }
     requestRender();
+    return;
+  }
+
+  if (drag.kind === 'text') {
+    if (Math.hypot(p.x - drag.start.x, p.y - drag.start.y) > tolerance()) drag.stray = true;
     return;
   }
 
@@ -1812,8 +1833,15 @@ overlay.addEventListener('pointermove', function (e) {
 
 function endDrag () {
   if (!drag) return;
-  var kind = drag.kind;
+  var d = drag, kind = d.kind;
   drag = null;
+
+  if (kind === 'text') {
+    /* a press that travelled is a habitual drag from the other tools, not a
+       placement — it opens nothing */
+    if (!d.stray) openEditor(active, d.at.x, d.at.y, -1);
+    return;
+  }
 
   if (kind === 'draw') {
     var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
@@ -1835,6 +1863,123 @@ function endDrag () {
 }
 overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
+
+/* ── label editor ──────────────────────────────────────────────────────────
+   A DOM text field floated over the preview, styled as the pill it becomes.
+   It is never on a canvas, so it cannot reach an export. It opens on pointer
+   *release*: the browser's mousedown focus step runs after pointerdown and
+   would blur a field focused there. closeEditor() is the single exit — every
+   action that could detach the field (a press on the overlay, a slot or
+   layout switch, a load, Clear, Reset crop, undo, a tool change) calls it
+   first — and the `done` flag makes the Enter-then-blur pair commit once. */
+var editor = null;      /* { el, idx, x, y, shape (index into the slot's shapes, or -1), orig, F, done } */
+var editEl = null;
+
+function editorEl () {
+  if (editEl) return editEl;
+  var el = document.createElement('input');
+  el.type = 'text'; el.id = 'labelEdit'; el.className = 'label-edit';
+  el.maxLength = 120; el.spellcheck = false; el.autocomplete = 'off';
+  el.setAttribute('aria-label', 'Label text');
+  el.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); closeEditor(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeEditor(false); }
+  });
+  el.addEventListener('input', sizeEditor);
+  el.addEventListener('blur', function () { closeEditor(true); });
+  editEl = el;
+  return el;
+}
+
+/* is shape i of `cell` the one currently in the editor? */
+function editing (cell, i) { return !!editor && editor.shape === i && cells[editor.idx] === cell; }
+
+/* colour and weight the field shows: the edited label's own, or the palette's for a new one */
+function editorLook () {
+  var s = editor.shape >= 0 ? cells[editor.idx].shapes[editor.shape] : null;
+  return { color: s ? s.color : state.color, weight: s ? s.weight : state.weight };
+}
+
+/* open at (x, y) in slot idx's source px; shapeIdx >= 0 re-edits that label */
+function openEditor (idx, x, y, shapeIdx) {
+  closeEditor(true);
+  var el = editorEl(), c = cells[idx];
+  var s = shapeIdx >= 0 ? c.shapes[shapeIdx] : null;
+  editor = { el:el, idx:idx, x:x, y:y, shape:shapeIdx, orig:s ? s.text : '', F:0, done:false };
+  el.value = editor.orig;
+  $('shotWrap').appendChild(el);
+  positionEditor();
+  el.focus();
+  var n = el.value.length;
+  try { el.setSelectionRange(n, n); } catch (e) {}
+  requestRender();                    /* the edited pill hides under the field */
+}
+
+/* place and style the field from the slot's geometry in the last paint */
+function positionEditor () {
+  if (!editor || !view) return;
+  var vs = null;
+  for (var i = 0; i < view.slots.length; i++) if (view.slots[i].idx === editor.idx) vs = view.slots[i];
+  if (!vs) { closeEditor(false); return; }          /* its slot emptied under it */
+  var look = editorLook(), el = editor.el;
+  var F = textSize(view.L, look) * view.fit;         /* css px, the pill's font at preview scale */
+  var a = mapPoint(vs.slot, view.S, vs.ax, vs.ay, editor.x, editor.y);
+  el.style.left = (a[0] / view.dpr) + 'px';
+  el.style.top = (a[1] / view.dpr) + 'px';
+  el.style.height = el.style.lineHeight = (1.5 * F) + 'px';
+  el.style.padding = '0 ' + (0.55 * F) + 'px';
+  el.style.borderRadius = (0.75 * F) + 'px';
+  el.style.fontSize = F + 'px';
+  el.style.background = look.color;
+  el.style.color = textInk(look.color);
+  editor.F = F;
+  sizeEditor();
+}
+
+/* the field's width is its own: the text so far plus padding and caret room */
+function sizeEditor () {
+  if (!editor) return;
+  var F = editor.F || TEXT_MIN;
+  var tw = measureLabel(editor.el.value || ' ') * F / TEXT_REF;
+  editor.el.style.width = (tw + 1.7 * F) + 'px';
+}
+
+/* the one exit: commit non-empty text (nudged inside the image), discard
+   empty text, remove the field */
+function closeEditor (commit) {
+  if (!editor || editor.done) return;
+  var ed = editor;
+  ed.done = true; editor = null;
+  var text = ed.el.value.trim();
+  if (ed.el.parentNode) ed.el.parentNode.removeChild(ed.el);   /* may fire blur: re-entry is a no-op */
+  var c = cells[ed.idx];
+  if (commit && text && c && c.source) {
+    if (ed.shape >= 0) {
+      var s = c.shapes[ed.shape];
+      if (s && s.text !== text) { pushHistory(); s.text = text; nudgeLabel(c, s); }
+    } else {
+      var label = { type:'text', x1:ed.x, y1:ed.y, text:text, color:state.color, weight:state.weight };
+      pushHistory();
+      nudgeLabel(c, label);
+      c.shapes.push(label);
+    }
+  }
+  syncEditUI(); requestRender();
+}
+
+/* Move the anchor so the whole pill lies inside the image's visible content.
+   A pill wider or taller than the image is left at the near edge and clipped,
+   since it cannot fit. */
+function nudgeLabel (cell, s) {
+  var L = layout(), slot = null;
+  if (!L) return;
+  for (var i = 0; i < L.slots.length; i++) if (L.slots[i].cell === cell) slot = L.slots[i];
+  if (!slot) return;
+  var tb = textBox(L, slot, s), C = slot.C;
+  s.x1 = tb.sw <= C.iw ? clamp(s.x1, C.sx, C.sx + C.iw - tb.sw) : C.sx;
+  s.y1 = tb.sh <= C.ih ? clamp(s.y1, C.sy, C.sy + C.ih - tb.sh) : C.sy;
+}
+
 
 function cropOrFull () {
   var c = cur();
