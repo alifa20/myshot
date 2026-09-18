@@ -1595,6 +1595,7 @@ function pushHistory () {
 }
 
 function undo () {
+  closeEditor(true);                  /* an open label is committed before anything is rewound */
   if (!history.length || drag) return;
   var prev = JSON.parse(history.pop());
   var changed = -1;
@@ -1759,6 +1760,12 @@ overlay.addEventListener('pointerdown', function (e) {
     var hit = hitShapeAny(e);
     if (hit && hit.idx !== active) { active = hit.idx; requestRender(); }
     selected = hit ? hit.i : -1;
+    if (hit) {
+      /* a press on a shape may become a move; nothing is pushed until the
+         pointer has travelled past the stray-click tolerance */
+      var sh = cur().shapes[hit.i];
+      drag = { kind:'move', i:hit.i, start:toSource(e), orig:{ x1:sh.x1, y1:sh.y1, x2:sh.x2, y2:sh.y2 }, pushed:false };
+    }
     paintOverlay();
     syncEditUI();
     return;
@@ -1799,6 +1806,20 @@ overlay.addEventListener('pointermove', function (e) {
     return;
   }
 
+  if (drag.kind === 'move') {
+    var ms = cur().shapes[drag.i];
+    if (!ms) return;
+    var dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+    if (!drag.pushed) {
+      if (Math.hypot(dx, dy) <= tolerance()) return;    /* a wobble is still a plain select */
+      pushHistory();                                     /* one move, one undo step */
+      drag.pushed = true;
+    }
+    moveShape(ms, drag.orig, dx, dy, activeSlot().slot);
+    requestRender();
+    return;
+  }
+
   var src = cur().source;
   if (drag.kind === 'crop-new') {
     var x1 = clamp(drag.start.x, 0, src.w), y1 = clamp(drag.start.y, 0, src.h);
@@ -1831,10 +1852,31 @@ overlay.addEventListener('pointermove', function (e) {
   }
 });
 
+/* Translate a shape from its pre-drag points by (dx, dy) in the slot's source
+   px. Clamping is per axis and applies only when the shape's box fits the
+   visible content on that axis; a shape larger than a tight crop translates
+   freely and stays clipped to the artwork as today. */
+function moveShape (s, o, dx, dy, slot) {
+  var C = slot.C, bx, by, bw, bh;
+  if (s.type === 'text') {
+    var tb = textBox(view.L, slot, s);
+    bx = o.x1; by = o.y1; bw = tb.sw; bh = tb.sh;
+  } else {
+    bx = Math.min(o.x1, o.x2); by = Math.min(o.y1, o.y2);
+    bw = Math.abs(o.x2 - o.x1); bh = Math.abs(o.y2 - o.y1);
+  }
+  if (bw <= C.iw) dx = clamp(bx + dx, C.sx, C.sx + C.iw - bw) - bx;
+  if (bh <= C.ih) dy = clamp(by + dy, C.sy, C.sy + C.ih - bh) - by;
+  s.x1 = o.x1 + dx; s.y1 = o.y1 + dy;
+  if (s.type !== 'text') { s.x2 = o.x2 + dx; s.y2 = o.y2 + dy; }
+}
+
 function endDrag () {
   if (!drag) return;
   var d = drag, kind = d.kind;
   drag = null;
+
+  if (kind === 'move') { syncEditUI(); requestRender(); return; }   /* history was pushed on first movement, or not at all */
 
   if (kind === 'text') {
     /* a press that travelled is a habitual drag from the other tools, not a
@@ -1863,6 +1905,18 @@ function endDrag () {
 }
 overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
+
+/* double-click a label with Select to re-edit it in place */
+overlay.addEventListener('dblclick', function (e) {
+  if (!view || tool !== 'select' || drag) return;
+  var hit = hitShapeAny(e);
+  if (!hit) return;
+  var s = cells[hit.idx].shapes[hit.i];
+  if (!s || s.type !== 'text') return;
+  if (hit.idx !== active) { active = hit.idx; requestRender(); }
+  selected = hit.i;
+  openEditor(hit.idx, s.x1, s.y1, hit.i);
+});
 
 /* ── label editor ──────────────────────────────────────────────────────────
    A DOM text field floated over the preview, styled as the pill it becomes.
@@ -1987,6 +2041,7 @@ function cropOrFull () {
 }
 
 function setTool (id) {
+  if (id !== 'text') closeEditor(true);                 /* leaving Text commits an open label */
   if (id === 'crop' && !cur().source) id = 'select';   /* nothing to crop in an empty slot */
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
@@ -2010,6 +2065,7 @@ function setTool (id) {
    would), then re-opened on the target if it holds an image; an empty target
    drops to Select, since there is nothing to crop. */
 function selectCell (idx) {
+  closeEditor(true);
   if (drag) return;                                   /* never mid-gesture: the drag owns draft */
   if (idx < 0 || idx >= visibleCount() || !cells[idx]) return;
   var wasCropping = cropping;
@@ -2041,8 +2097,13 @@ function syncEditUI () {
     var r = cropOrFull();
     $('cropDims').textContent = fmt(r.w) + ' × ' + fmt(r.h);
   }
-  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
-  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop) ? 'false' : 'true');
+  /* a label being typed counts as content: Undo and Clear all stay reachable,
+     and either one commits it first (a disabled button would swallow the
+     click and leave the label standing) */
+  var pending = !!editor;
+  $('undoBtn').setAttribute('aria-disabled', (history.length || pending) ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop || pending) ? 'false' : 'true');
+
 }
 
 /* A new image in a cell means that cell's crop and shapes are meaningless; the
@@ -2281,6 +2342,7 @@ function acceptFile (file, idx) {
 /* The one place an image lands in a cell — the normal decode path and the
    sample's canvas fallback both end here. */
 function setSource (cell, img, w, h, name) {
+  closeEditor(true);                  /* an open label lands in its own slot first */
   if (cropping) setTool('select');    /* commit an open crop before anything moves */
   if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
   cell.source = { img:img, w:w, h:h, name:name };
@@ -2327,6 +2389,7 @@ function loadImage (blob, name, idx) {
 
 function clearImage (idx) {
   var cell = cells[idx === undefined ? active : idx];
+  closeEditor(true);
   if (cropping) setTool('select');
   if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
   cell.source = null; cell.rev++;
@@ -2477,6 +2540,7 @@ $('weight').addEventListener('input', function () {
 
 $('undoBtn').addEventListener('click', undo);
 $('clearShapes').addEventListener('click', function () {
+  closeEditor(true);
   var c = cur();
   if (!c.shapes.length && !c.crop) return;
   pushHistory();
@@ -2487,6 +2551,7 @@ $('clearShapes').addEventListener('click', function () {
 });
 $('cropDone').addEventListener('click', function () { setTool('select'); });
 $('cropReset').addEventListener('click', function () {
+  closeEditor(true);
   var c = cur();
   pushHistory(); c.crop = null; invalidate(c); syncEditUI(); requestRender();
 });
@@ -2504,6 +2569,7 @@ buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
 function setLayout (id) {
   var lay = layoutById(id);
   if (!lay || lay.id === state.layout) return;
+  closeEditor(true);                         /* commit an open label into its slot first */
   if (cropping) setTool('select');           /* commit an open crop first */
   drag = null; draft = null; selected = -1; history = [];
 
@@ -2737,6 +2803,7 @@ function hasFiles (e) {
 }
 
 window.addEventListener('paste', function (e) {
+  if (isTyping(document.activeElement)) return;   /* a paste into a text field is the field's */
   var items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
   for (var i = 0; i < items.length; i++) {
@@ -2788,13 +2855,14 @@ window.addEventListener('keydown', function (e) {
   }
 
   if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  if (isTyping(document.activeElement)) return;   /* the field owns ⌘Z, ⌘S, ⌘O and ⌘C while it has focus */
 
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
   if (k === 's') { e.preventDefault(); doExport(); return; }
   if (k === 'o') { e.preventDefault(); $('filePicker').click(); return; }
   if (k === 'c') {
-    if (isTyping(document.activeElement)) return;
     var sel = window.getSelection();
+
     if (sel && String(sel).length) return;      /* let a real text copy through */
     if (!anyFilled()) return;
     e.preventDefault(); doCopy();
