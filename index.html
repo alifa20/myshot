@@ -234,7 +234,7 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(-
 
 /* tool palette */
 .tools{
-  position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:3px;
+  position:relative;display:grid;grid-template-columns:repeat(6,1fr);gap:3px;
   padding:3px;border-radius:var(--r-md);background:#0C0C0E;border:1px solid var(--line);
   box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
 }
@@ -580,7 +580,7 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
         <span><kbd>⌘C</kbd> copy</span>
         <span><kbd>⌘V</kbd> paste</span>
         <span><kbd>⌘Z</kbd> undo</span>
-        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd> tools</span>
+        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd><kbd>T</kbd> tools</span>
         <span><kbd>⌫</kbd> delete</span>
       </div>
     </div>
@@ -698,7 +698,8 @@ var TOOLS = [
   { id:'crop',    label:'Crop',    key:'c', svg:'<path d="M4.2 1.6v10.2h10.2M1.6 4.2h10.2v10.2"/>' },
   { id:'arrow',   label:'Arrow',   key:'a', svg:'<path d="M3 13 12.9 3.1M8.3 2.8h4.9v4.9"/>' },
   { id:'rect',    label:'Box',     key:'r', svg:'<rect x="2.4" y="3.6" width="11.2" height="8.8" rx="1.6"/>' },
-  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' }
+  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' },
+  { id:'text',    label:'Text',    key:'t', svg:'<path d="M3.2 3.6h9.6M8 3.6v9"/>' }
 ];
 
 var COLORS = ['#FF453A', '#FF9F0A', '#32D74B', '#0A84FF', '#FFFFFF', '#16181B'];
@@ -731,7 +732,7 @@ function makeCell () {
     source:null,          /* { img, w, h, name } */
     rev:0,                /* bumped on every load/clear; part of both cache keys */
     crop:null,            /* {x,y,w,h} in source px, or null */
-    shapes:[],            /* {type,x1,y1,x2,y2,color,weight} */
+    shapes:[],            /* {type,x1,y1,x2,y2,color,weight}; a label is {type:'text',x1,y1,text,color,weight} */
     art:emptyCache(),
     cropCache:emptyCache()
   };
@@ -1085,6 +1086,57 @@ function shapeList (cell) {
   return (draft && cell === cur()) ? cell.shapes.concat([draft]) : cell.shapes;
 }
 
+/* ── labels ────────────────────────────────────────────────────────────────
+   A label is a one-point shape: its anchor is the pill's top-left in the
+   cell's source px, and the pill box is *measured* from the text. The box is
+   canonical across preview and both export scales because the text is
+   measured once, at a fixed reference size, and scaled — glyph advances are
+   not linear in size on the platform stack, so measuring at each size would
+   let the pill drift between 1× and 2×. */
+var TEXT_FONT = 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+var TEXT_REF = 64;                      /* px, the measurement reference size */
+var TEXT_MIN = 10;                      /* cell units — a label never shrinks past legibility */
+var measureCtx = null, measureCache = {}, measureCount = 0;
+
+function textFont (px) { return '600 ' + px + 'px ' + TEXT_FONT; }
+
+/* the text's advance width at TEXT_REF px, cached per string */
+function measureLabel (text) {
+  var hit = measureCache[text];
+  if (hit !== undefined) return hit;
+  if (!measureCtx) measureCtx = makeCanvas(1, 1).getContext('2d');
+  if (measureCount > 300) { measureCache = {}; measureCount = 0; }
+  measureCtx.font = textFont(TEXT_REF);
+  var w = measureCtx.measureText(text).width;
+  measureCache[text] = w; measureCount++;
+  return w;
+}
+
+/* font size follows the weight on the same relative scale as stroke width, so
+   labels match across both slots and every output scale */
+function textSize (L, shape) { return Math.max(TEXT_MIN, 3.2 * strokeWidth(L, shape)); }
+
+/* the pill box for a label, in cell units (F, tw, padX, w, h) and in the
+   cell's own source px (sw, sh) — hit-testing and nudging work in source px */
+function textBox (L, slot, shape) {
+  var F = textSize(L, shape);
+  var tw = measureLabel(shape.text) * F / TEXT_REF;
+  var padX = 0.55 * F, w = tw + padX * 2, h = 1.5 * F;
+  return { F:F, tw:tw, padX:padX, w:w, h:h, sw:w / slot.k, sh:h / slot.k };
+}
+
+/* White or near-black text on the pill, by the fill's relative luminance. The
+   cut sits between the palette's red and blue (white text) and its orange and
+   green (dark text); a pure highest-contrast-ratio pick would put dark text on
+   red, which reads as a warning badge rather than a label. */
+var TEXT_INK_DARK = '#16181B', TEXT_INK_CUT = 0.35;
+function luminance (hex) {
+  var c = hexToRgb(hex), v = [], i;
+  for (i = 0; i < 3; i++) { var s = c[i] / 255; v.push(s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)); }
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+function textInk (fill) { return luminance(fill) > TEXT_INK_CUT ? TEXT_INK_DARK : '#FFFFFF'; }
+
 /* a cell's source px → output px (k scales the cell's source into cell units) */
 function mapPoint (slot, S, ax, ay, x, y) {
   return [ax + (x - slot.C.sx) * slot.k * S, ay + (y - slot.C.sy) * slot.k * S];
@@ -1098,7 +1150,6 @@ function drawShapes (g, slot, L, S, ax, ay) {
     var s = list[i];
     var w = Math.max(1, strokeWidth(L, s) * S);
     var a = mapPoint(slot, S, ax, ay, s.x1, s.y1);
-    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
 
     g.save();
     g.strokeStyle = s.color; g.fillStyle = s.color;
@@ -1109,6 +1160,22 @@ function drawShapes (g, slot, L, S, ax, ay) {
     g.shadowBlur = w * 1.6;
     g.shadowOffsetY = w * 0.35;
 
+    if (s.type === 'text') {
+      var tb = textBox(L, slot, s), pw = tb.w * S, ph = tb.h * S;
+      roundRectPath(g, a[0], a[1], pw, ph, ph / 2);
+      g.fill();
+      g.shadowColor = 'transparent';           /* the pill carries the shadow, not the glyphs */
+      g.fillStyle = textInk(s.color);
+      g.font = textFont(tb.F * S);
+      g.textAlign = 'left'; g.textBaseline = 'middle';
+      /* max-width pins the glyphs to the measured inner width, so text can
+         never spill past its pill at any scale */
+      g.fillText(s.text, a[0] + tb.padX * S, a[1] + ph / 2, tb.tw * S);
+      g.restore();
+      continue;
+    }
+
+    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
     if (s.type === 'arrow') drawArrow(g, a[0], a[1], b[0], b[1], w);
     else if (s.type === 'rect') {
       roundRectPath(g, Math.min(a[0], b[0]), Math.min(a[1], b[1]),
@@ -1350,7 +1417,7 @@ function render () {
   overlay.style.height = cssH + 'px';
   overlay.width = shot.width; overlay.height = shot.height;
   paintOverlay();
-  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
+  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : tool === 'text' ? 'text' : 'crosshair');
 }
 
 /* ── overlay: crop frame + selection chrome (never exported) ───────────── */
@@ -1441,10 +1508,17 @@ function paintOverlay () {
   if (vs && selected >= 0 && selected < shapes.length) {
     var s = shapes[selected];
     var a = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x1, s.y1);
-    var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
-    var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
-    var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
-    var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
+    var x, y, w, h;
+    if (s.type === 'text') {
+      /* the chrome outlines the pill itself */
+      var tb = textBox(L, vs.slot, s), tp = 3 * view.dpr;
+      x = a[0] - tp; y = a[1] - tp; w = tb.w * S + tp * 2; h = tb.h * S + tp * 2;
+    } else {
+      var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
+      var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
+      x = Math.min(a[0], b[0]) - pad; y = Math.min(a[1], b[1]) - pad;
+      w = Math.abs(b[0] - a[0]) + pad * 2; h = Math.abs(b[1] - a[1]) + pad * 2;
+    }
     g.strokeStyle = 'rgba(232,160,92,.95)';
     g.lineWidth = Math.max(1, view.dpr);
     g.setLineDash([5 * view.dpr, 4 * view.dpr]);
@@ -1582,6 +1656,12 @@ function hitShape (p, vs) {
   var L = view.L, shapes = vs.slot.cell.shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
+    if (s.type === 'text') {
+      /* a label is a filled pill: hit means inside it */
+      var tb = textBox(L, vs.slot, s);
+      if (p.x >= s.x1 && p.x <= s.x1 + tb.sw && p.y >= s.y1 && p.y <= s.y1 + tb.sh) return i;
+      continue;
+    }
     /* p and tol are in this cell's source px; strokeWidth is in cell units */
     var sw = strokeWidth(L, s) / vs.slot.k;
     var tol = Math.max(tolerance(vs), sw);
@@ -1675,7 +1755,9 @@ overlay.addEventListener('pointerdown', function (e) {
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
   var C = activeSlot().slot.C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
+  if (tool === 'text') return;                 /* labels are placed through the editor (next unit) */
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
+
   drag = { kind:'draw' };
 });
 
