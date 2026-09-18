@@ -50,7 +50,8 @@ usually be scaled down to fit under it, and the toast names that too.
 
 ### Cropping and annotating
 
-Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow · `R` box · `E` ellipse.
+Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow · `R` box · `E` ellipse ·
+`T` text.
 
 - **Crop** shows the full frame again with a selection over it: drag outside the box to start a new
   one, inside it to move it, or grab any of the 8 handles to resize (dragging a handle past its
@@ -62,8 +63,20 @@ Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow 
   The arrow is a single filled path — a shaft that tapers from tail to head, then a broad head about
   6× the shaft across with a slight sweep. A uniform line with a small triangle on the end reads as
   timid at screenshot scale; the head has to carry the arrow.
-- **Select** then click a shape to select it, `⌫` to delete. `⌘Z` undoes any edit, **Clear all**
-  removes everything. Changing the colour or weight while a shape is selected retints that shape.
+- **Text** puts a short label on the image: click where it should go, type, `Enter` (or click
+  anywhere else) to commit, `Escape` to cancel. A label is a rounded pill in the current colour with
+  white or near-black text, whichever reads against the fill, and the weight slider sets its size on
+  the same scale as the stroke width, so labels match across both two-up slots and both export
+  scales. A label that would poke past the image edge is nudged back inside. Single line only, in
+  the platform UI font — an export made on another machine may set the text in a different face,
+  the same trade-off the app's own UI makes.
+- **Select** then click a shape to select it, `⌫` to delete, or drag it to move it (arrows, boxes,
+  ellipses and labels alike; one drag is one undo step). Double-click a label to edit its text.
+  `⌘Z` undoes any edit, **Clear all** removes everything. Changing the colour or weight while a shape
+  is selected retints that shape. While you are typing a label the text field owns the keyboard —
+  tool keys, `⌫`, `⌘Z`, `⌘S`, `⌘O`, `⌘C` and image paste all go to the field — and any action that
+  would move away from it (a click on the stage, a layout switch, a load, **Clear**, undo, another
+  tool) commits it first.
 
 Annotations are stored in the **source image's own pixels** (each slot's own, in two-up), not screen
 coordinates, so they stay anchored to whatever they point at through cropping, ratio changes, layout
@@ -152,7 +165,18 @@ selection, `⌫`, **Clear all** and `⌘Z` all act on the right slot; the parked
 single and back with its crop; the layout survives a reload and **Reset**; and an export with an
 empty slot keeps real alpha there on a transparent background. See `docs/plan.md` §7.
 
+Text labels were verified the same way (Chrome 153 headless, 122 assertions across three suites): the
+five single-layout reference exports stay byte-identical with no labels present; a label committed at
+a known image point draws its pill with the top-left at that point in the preview, the 1× export and
+the 2× export, with no text pixels outside the pill at 2×; the editor's font size and background match
+the pill at preview scale and it stays over its anchor through a viewport resize; two labels at the same
+weight in a 1440×900 beside a 1280×800 come out the same height in the export; every interruption
+(stage click, slot switch, layout switch, paste-ignored-then-drop, **Clear all**, **Undo**, the crop
+tool, **Clear**) commits or discards the field first; moving a label, an arrow, a box or an ellipse is
+one undo step and lands where dropped at both export scales. See `docs/plan.md` §8.
+
 One known browser gap: Chrome ignores `aria-valuetext` on a native `input[type=range]`, so a screen
+
 reader there announces a slider's raw number rather than its px readout. The attribute is set anyway
 (Firefox and Safari honour it) and each slider is `aria-describedby` its own readout so the px value
 stays reachable in Chrome.

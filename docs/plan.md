@@ -169,6 +169,9 @@ runtime probe returns true in Chrome), so the fallback path is untaken there but
 Explicitly requested, and scoped by the user to **crop + arrow / box / ellipse** — text, highlighter
 and blur/redaction were offered and deliberately not taken, so they stay out.
 
+> **Later:** text was added on request after two-up shipped, as free-placed labels on the image —
+> see §8. Highlighter and blur/redaction remain out.
+
 **Model.** `crop` is a rectangle on whole source pixels; `shapes` are `{type,x1,y1,x2,y2,color,weight}`
 in the **source image's own pixels**. Both live outside `state`, so neither is persisted — they are
 meaningless against a different image, and loading one resets them. Coordinates in source space is
@@ -332,3 +335,116 @@ empty slot exported at 1860×640 (952 KB, grain dropped and scaled down), and wi
 necessarily larger than 1×. The cap is a deliberate guardrail (§4) and applies to the whole
 composition; the toast names what it did, and the README says so. A cropped slot narrower than the
 other is upscaled even at 1×.
+
+---
+
+## 8. Follow-up: text labels (requested after two-up)
+
+Requested as a word or two on each side of a before/after pair. The product decisions were settled up
+front: free-placed labels that follow the image rather than slot captions in the padding; a filled pill
+in the palette colour with the weight slider setting its size (no new control); placement anywhere on
+the image, clipped like the other shapes; Select to move, double-click to edit, single line only; and
+drag-to-move for *every* shape type, since the gesture is identical and leaving arrows immovable would
+make the tools inconsistent. The full plan is `docs/plans/2026-09-18-1425-feat-text-annotations-plan.md`;
+this reverses the §6 "no text" scope call.
+
+**Model.** A label is a one-point shape, `{ type:'text', x1, y1, text, color, weight }`, anchored at
+the pill's top-left in the slot's source pixels, so it follows its image through crops, layout
+switches, parking and both export scales exactly as the two-point shapes do. It is drawn by the same
+`drawShapes()` in `paint()`, clipped to its artwork, and is never overlay-only.
+
+- **Measured box, canonical across scales.** Font size `F = max(10, 3.2 × strokeWidth)` in cell units
+  (21.2 at the default weight on a 1440×900). The text is measured once at a fixed 64 px reference and
+  scaled to `F`; glyph advances are not linear in size on the platform stack, so measuring at each
+  output size would let the pill drift between preview, 1× and 2×. Padding is `0.55F` a side, height
+  `1.5F` (31.8 units at the default), divided by the slot's `k` for hit-testing and nudging in source
+  px. `fillText` gets the inner width as its max-width, so glyphs can never spill past the pill.
+- **Ink.** White or near-black (`#16181B`) text by the fill's relative luminance, with the cut at 0.35:
+  white on red, blue and near-black; dark on orange, green and white.
+- **The editor is a DOM `<input type="text">`** floated over the preview inside `.shotwrap`, styled
+  as the pill it becomes (`F × fit` css px, same padding, radius and colours), `maxlength` 120,
+  `aria-label` "Label text". It is never on a canvas, so it cannot reach an export. It opens on pointer
+  *release* — the browser's mousedown focus step runs after `pointerdown` and would blur a field
+  focused there — and `render()` repositions it every frame, so it tracks a resize or a display change.
+- **One exit.** `closeEditor(commit)` commits non-empty text (nudged so the whole pill lies inside the
+  image; a pill wider than the image is left at the left edge and clipped), discards empty text,
+  removes the field. A `done` flag makes the Enter-then-blur pair commit once. Every action that could
+  detach the field calls it first: any overlay press, `selectCell`, `setLayout`, `setSource`,
+  `clearImage`, Clear all, Reset crop, `undo`, and `setTool` when leaving Text. The keyboard handler's
+  ⌘Z/⌘S/⌘O branches and the image `paste` listener gained the `isTyping` guard ⌘C already had.
+- **Move.** A Select press on any shape records a `move` drag; nothing is pushed until the pointer has
+  travelled past the stray-click tolerance, then one history entry and the shape translates by the
+  delta — both points for two-point shapes, the anchor for a label. Clamping is per axis and only when
+  the shape's box fits the visible content on that axis; a shape larger than a tight crop translates
+  freely and stays clipped as before. Release without movement is a plain select.
+- **Double-click** on a label with Select reopens the field pre-filled; Enter replaces the text as one
+  entry, Escape leaves it unchanged. The pill hides under the field while it is being edited.
+
+**Verification** — Chrome 153 headless over CDP, the same dependency-free driver as §7: real mouse and
+key events, text typed into the field key by key, an IME-style insert for the length cap, exports
+downloaded and read back, pixels asserted. 122 assertions across three suites, the §6 and §7 suites
+re-run green after every unit, and the five single-layout reference captures **byte-identical** to the
+pre-text build after U1, U2 and U3. Console clean, zero network requests, Lighthouse accessibility 100
+(best practices 0.96 from the pre-existing mobile font-size audit, unchanged since §5).
+
+| Check | Result |
+| --- | --- |
+| Text tool in the palette, `T` selects it, `text` cursor | six labelled radios; palette grid widened to six columns |
+| Click at image (600, 400), type "Before", Enter | red pill, top-left within 2.5 px of the anchor in the preview, the 1× export and the 2× export; width = measured text + 2 × 0.55F within 3 px |
+| Editor while open | computed font-size = F × fit (±0.6 px), background `rgb(255, 69, 58)`, height 1.5F × fit, positioned over the anchor within 1.5 px, still focused on the next frame |
+| Pill vs field width | pill snaps to the measured width; the field keeps its own (caret room), differing by > 4 css px |
+| Text ink per swatch | white glyphs on red, blue, near-black; dark glyphs on orange, green, white |
+| No text outside the pill at 2× | zero white pixels in a 60-unit band right of the pill and a 17-unit band above it |
+| Whitespace-only label, blur | no label, undo disabled, field removed |
+| Escape with text typed | no label, no history entry |
+| Text-tool drag past the tolerance | no editor, no label |
+| Enter then blur | exactly one label and one history entry |
+| Click 10 px from the right edge, "Overflow"; click 5 px from the bottom, "Low" | pill nudged inside; right edge (and bottom edge) within 2 px of the image edge, width unchanged |
+| Text click on top of a label | a second label (two history entries) |
+| Editor open, Text click elsewhere | first label committed with its own entry, fresh empty editor at the second point |
+| Editor open, Select chosen from the palette, click an arrow | label committed, arrow selected, the select click added no entry |
+| Viewport 1600 → 1200 with the editor open | field still over the anchor (±1.5 px) at the new fit, font follows |
+| Export button with the editor open | field committed and closed; the label is in the PNG; no editor pixels can exist there |
+| 130 characters inserted | value stops at 120 |
+| Two-up: Text click in the right slot while the left is active | right slot activates, label lands in the right slot; "Before"/"After" at the same weight are the same pill height in the 1× export (±1.5 px), = 1.5 × 3.2 × stroke width |
+| Two-up → single → two-up | right-slot label returns with its slot |
+| Drag a label and an arrow 200 px right | both move 200 px, two entries, one ⌘Z restores only the arrow |
+| Select click without moving | selected, no entry; chrome outlines the pill (ring ink, none inside); ⌫ removes it as one entry |
+| Drag a label 1300 px past the edge | stops with the pill inside the image |
+| Crop inside a box, then drag the box | moves 100 px, stays clipped, no exception, one entry |
+| Double-click "Befor", type "e", Enter | reads "Before" (pill widened), one entry; ⌘Z restores "Befor"; double-click then Escape changes nothing |
+| Colour swatch with a label selected / weight 46 → 80 | pill retinted blue with one entry / pill height 22.5 → 39 px live with no entry; ⌘Z undoes the recolour |
+| Editor open in the right slot, press `1`, click the left slot | "After1" committed in the right slot, left becomes active, tool still Text, fresh editor on the left |
+| Editor open, image pasted | ignored; field still open with its text; slots unchanged |
+| Editor open, image dropped on the other slot | label committed to its slot first, drop lands in the other |
+| Editor open, layout → single (programmatic) | label committed and parked; back in two-up it is there |
+| ⌘Z, `c` while typing | field owns both; nothing committed, tool unchanged; after Enter, ⌘Z removes the label |
+| Clear all / Undo / Crop tool / Clear with the editor open | committed then cleared (⌘Z brings it back) / committed then undone / committed, crop opened / committed, slot emptied — no exceptions |
+| Box and ellipse moved in the scaled two-up slot | land where dropped in the preview, the 1× export and the 2× export |
+
+**Found and fixed here**
+
+1. KTD2 specified the text ink as whichever of white and near-black has the higher WCAG contrast
+   ratio, and said that gives white on red. It does not: on `#FF453A` dark text scores 5.2:1 against
+   white's 3.4:1, so the literal rule would draw a warning badge where AE1 asks for a red pill with
+   white text. The break-even of that rule is a luminance of 0.20, and red sits at 0.26; a cut at 0.35
+   gives the six outcomes the plan lists, and the palette is fixed, so that is what shipped.
+2. **Undo** and **Clear all** are disabled when nothing has been drawn, and a disabled button has
+   `pointer-events: none` — so with a label half-typed and nothing else on the image, a click on either
+   fell through to the panel, blurred the field, and the label committed *and stood*: "I clicked Clear
+   all and my label appeared." A pending label now counts as content, so both buttons stay live while
+   the field is open and commit it before acting.
+3. Test expectations that were wrong, not the app: colour, weight and layout persist across reloads,
+   so each scenario group must reset them (the AE6 label came out blue at weight 80 from the previous
+   group); a single-pixel probe 4 px into a pill's corner lands outside its rounded end, and a column
+   through glyphs meets anti-aliased edges that are neither ink nor fill, so probes moved to the pill's
+   mid-height or to bounding boxes of non-background pixels; a crop drag that starts inside the default
+   12–88 % rectangle *moves* it rather than drawing a new one; and an ellipse spanning 800–1200 in a
+   1280-wide image cannot move 100 px right — it clamps at 880, which is the plan's per-axis rule
+   working as written.
+
+**Observed, not changed.** Reset crop is listed as an interruption in the plan, but the crop bar is only
+visible while cropping and the Text tool cannot be active then, so the path is unreachable from the UI;
+the guard is in place anyway. ⌘Z while the field has focus is the browser's own editing undo, which
+may remove typed characters — the app's history is untouched either way.
+
