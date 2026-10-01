@@ -11,7 +11,7 @@ step, no frameworks, no network requests at runtime.
 
 | Requirement | Decision |
 | --- | --- |
-| Input | drag-and-drop, paste (`⌘V`), file picker. A new image *replaces* the current one. |
+| Input | drag-and-drop, paste (`⌘V`), file picker. A new image *replaces* the current one (in two-up, the one in the target slot — see §7). |
 | Controls | padding, corner radius, shadow, background, canvas ratio — all live, no Apply. |
 | Backgrounds | 12 presets (6 mesh, 3 gradient, 3 solid) + transparent + custom colour. |
 | Ratios | Auto · 16:9 · 4:3 · 1:1 · 2:1 (X/Twitter). "Twitter-size" is listed separately from 16:9 in the brief, so it must be a *different* ratio → 2:1, the `summary_large_image` shape. |
@@ -28,8 +28,9 @@ step, no frameworks, no network requests at runtime.
 - A generated sample screenshot so the page demonstrates itself on first open.
 
 **Deliberately excluded**: 3D/perspective tilt, device & browser frames, watermarking, redaction,
-multi-image layouts, image backgrounds. The prompt already narrowed the Shots/Xnapper feature set;
-widening it would dilute the part that has to be excellent.
+image backgrounds. The prompt already narrowed the Shots/Xnapper feature set; widening it would
+dilute the part that has to be excellent. Multi-image layouts were on this list too; a bounded form
+of them — a two-slot before/after grid, not free-form stacking — was added later on request (§7).
 
 ---
 
@@ -224,3 +225,110 @@ reference, over three iterations:
 Weight scale also went from `0.012` to `0.016` of the shortest edge, default `34 → 46`, since the old
 default was too fine to see. Arrow hit-testing now uses `2.5×` the stroke width, because a
 shaft-width tolerance left the widest, most clickable part of the arrow unclickable.
+
+---
+
+## 7. Follow-up: two-up before/after layout (requested after crop + annotation)
+
+Requested as a before/after pair: switch the stage from one image to two equal-width slots side by
+side, paste one into each, export the pair as one PNG. Four-up is a later follow-up. The product
+decisions (equal-width slots scaled to fit, per-image padding/radius/shadow on one background, an
+active slot for paste with drop-under-cursor, full crop and annotation per slot, parking the right
+slot on a switch to single, export allowed with an empty slot, layout persisted, one shared undo) were
+settled up front; the full plan is `docs/plans/2026-09-17-2000-feat-two-up-collage-layout-plan.md`.
+
+**Model.** `cells[]` replaces the single-image globals: each cell owns its `source`, `rev`, `crop`,
+`shapes` and both caches, and every cache reset goes through `invalidate(cell | all)`. `LAYOUTS` is a
+table of `cols × rows` grids (`single`, `two-up`); the geometry handles any grid, so four-up is a
+table row plus keys `3`/`4`. `active` is the slot that paste, Open…, Sample and Clear act on; after
+any load it advances to the next empty visible slot.
+
+- **Cell units.** Composition units are the widest filled slot's *content* pixels (crop applied; a
+  slot in crop mode contributes its full frame). Each slot has `k = cellW / contentW`, so the widest
+  content is 1:1 and narrower content scales up to match; the slot height is the tallest scaled
+  content and images centre vertically. In single layout `k = 1` and everything reduces to §3, which is
+  why the old exports stay byte-identical. The alternative — the narrowest width as the unit — would
+  downsample the larger image at 1×; native frame width would break parity as soon as a crop exists.
+- **Shared metrics.** Padding measures against the longest slot edge, radius and stroke weight against
+  the shortest, the shadow base against the longest, all in cell units, so both slots match. The gutter
+  equals the padding. `paint()` draws *every* shadow before any artwork: the shadow cap is
+  `1.25 × max(pad, 2% of the longest edge)` and its blur spreads across the whole gutter, so painting
+  in slot order would darken the left image with the right one's shadow.
+- **Per-slot hit-testing.** `view` carries one rect per slot plus each filled slot's `ax, ay, k`;
+  `cellAt(clientX, clientY)` serves pointerdown, dragover and drop, and `toSource`, `tolerance`,
+  `hitShape` and `mapPoint` take a slot and scale by its `k`. A press on an empty slot only activates it
+  and drops to Select; a press on the other filled slot activates it and continues the gesture there,
+  clamped to its image; a Select miss in the active slot falls through to the other slot's shapes.
+- **Switching.** `setLayout` commits an open crop, drops any gesture and selection, clears history
+  (snapshots are keyed by slot index and would otherwise rewrite hidden or moved cells), then parks a
+  slot that falls off screen — or promotes it into an empty visible slot so a lone right image is not
+  hidden. Bitmaps are closed only when their own slot is replaced or cleared.
+- **Overlay chrome.** Active slot: a solid amber hairline. Empty slot: a dashed rounded rect with
+  "Paste or drop here", dark-then-light like the crop guides. Drop target: a dashed frame with a light
+  fill, distinct from the active hairline. The blurred full-screen veil is used only when nothing is
+  rendered or in single layout. Because the overlay is `aria-hidden`, a visually hidden live region
+  announces "Left/Right cell active" and empty slots get a DOM text twin.
+- **Export.** Export/Copy enable when any visible slot is filled; an empty slot renders as bare
+  background and the toast names it ("right slot empty") alongside the canvas-limit and 1MB notes.
+  `layout` persists with the other settings, validated against `LAYOUTS`; **Reset** leaves it alone.
+
+**Verification** — Chrome 153 headless, driven over CDP by a dependency-free Node script (built-in
+`WebSocket`): real mouse and key events, paste and drop synthesised with `File` + `DataTransfer`, exports
+downloaded to disk and read back through `createImageBitmap`, pixels asserted rather than DOM state.
+119 assertions across five suites, plus a byte-for-byte diff of five single-layout reference captures
+(sample 1× 1627×1087, 2× 3254×2174, cropped-with-arrow-and-box 1× 1236×826 and 2× 2472×1652, and
+the preview canvas) against the pre-two-up build — **identical after every unit**. Console clean and
+zero network requests throughout.
+
+| Check | Result |
+| --- | --- |
+| Single-layout parity (5 reference PNGs) | byte-identical after each of U1–U6 |
+| 1440×900 beside 1280×800 | composition 3161×1087, both slots painted, gutter is background |
+| Padding/shadow drag on a 3360×2000 source | 66 ms / 33 ms per frame median — identical to the pre-change build in the same headless, GPU-less run |
+| Two pastes from empty | left, then right (active advanced); third paste replaces right; `1` then paste replaces left |
+| Drop over the right slot | no veil, slot highlighted during the drag, highlight gone after, image lands right; gutter drop → active slot |
+| Non-image drop | existing error toast, slots unchanged |
+| Sample / Clear | Sample into the active slot; Clear empties the active slot; clearing the last one returns the empty state |
+| Load while the other slot is cropping | crop committed first through the normal path, tool back to Select |
+| Arrow drawn in the scaled slot | same red pixel at the mapped point in the preview, the 1× export and the 2× export |
+| Box dragged from the right slot across the gutter | activates the right slot, clamped to its left edge, never crosses the gutter |
+| Select-click on a shape in the other slot | activates it, draws selection chrome; `⌫` deletes only that shape; an 8 css px near-miss on the scaled slot still selects |
+| Crop on the right slot | dim covers both slots, handles at the right slot's frame, Enter applies to the right slot only (973×608 cropped) |
+| `⌘Z` after cropping the right slot while the left is active | crop reverts and the active highlight moves to the right slot |
+| Clear all with the left slot active | clears the left slot's shapes only |
+| Empty-slot gesture with the arrow tool | no shape, slot becomes active, tool drops to Select |
+| Live region / text twin | "Right cell active" → "Left cell active" on `1`/click; "Right cell: paste or drop here" present while empty, gone once filled |
+| Two-up → single → two-up with a crop on the right | right slot returns with its crop; history cleared by the switch |
+| Only the right slot filled → single | promoted into the single view, Export stays enabled; back to two-up puts it in the left slot |
+| Switch mid-crop / mid-drag | crop committed before parking; interrupted drag leaves no shape |
+| Reload / Reset / invalid stored value | two-up restored; Reset keeps two-up and resets padding; `layout: 'nonsense'` loads as single |
+| Export with the right slot empty | "right slot empty" warning toast; placeholder never reaches the PNG; transparent background keeps alpha 0 there |
+| Copy with the left slot empty | on `file://` the existing "Copy failed … Download instead" fallback fires; the export names the empty left slot |
+| Two 5120×2880 at 2× | falls back to 1× with the notice, readout shows `·1×`, real PNG |
+
+**Found and fixed here**
+
+1. `clearBtn` was bound straight to `clearImage`, so once the function took a slot index the click
+   event was read as one — `cells[MouseEvent]`. Wrapped in a closure; the check that caught it was
+   "Clear empties the active slot" in U4.
+2. The annotation weight readout still multiplied by `0.012` while the stroke used `0.016` (§6a changed
+   the stroke and missed the readout). It now calls `strokeWidth()` itself, so the two cannot drift.
+3. Three test expectations were wrong, not the app: opening the crop tool and dragging are two undo
+   steps (as before); pasted images are named `pasted-<stamp>.png`, not by the file; and after U5 the
+   active hairline is always on the overlay, so "no ink after drop" became "no more ink than idle".
+4. The harness's own `getImageData` readbacks tripped the console-clean check; it now reads through a
+   scratch canvas flagged `willReadFrequently`, so a warning in that check is the app's, never the tool's.
+5. Found by the adversarial code review after the PR opened: with `layout: 'two-up'` restored from
+   `localStorage`, `cells` booted as a one-element array, so the first paste on a reloaded two-up stage
+   threw inside the auto-advance loop. `ensureCells(visibleCount())` now runs at boot and on every switch.
+   Three gesture-ordering defects came with it: a press on the other slot while cropping is now a pure
+   slot switch (it used to fall through into the crop branch against pre-switch geometry), a digit key or
+   `⌘Z` during an in-flight drag is ignored (it nulled `draft` under the pointer), and an undo that changes
+   the other cell closes an open crop session before moving the highlight. Each has a scenario in the suite.
+
+**Observed, not changed.** Two full-size slots routinely exceed the 1MB cap: a 1440×900 beside an
+empty slot exported at 1860×640 (952 KB, grain dropped and scaled down), and with both slots filled the
+1× and 2× exports came out at 0.92× and 0.86× of composition size respectively — at the cap, 2× is not
+necessarily larger than 1×. The cap is a deliberate guardrail (§4) and applies to the whole
+composition; the toast names what it did, and the README says so. A cropped slot narrower than the
+other is upscaled even at 1×.

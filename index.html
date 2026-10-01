@@ -137,6 +137,8 @@ button{cursor:pointer;border:none;background:none;padding:0}
   background-size:18px 18px;background-position:0 0,9px 9px;
 }
 .stage.empty #shot{display:none}
+/* screen-reader text for canvas-only state (active slot, empty-slot placeholders) */
+.vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 
 /* empty state */
 .empty-ui{display:none;text-align:center;max-width:420px}
@@ -440,6 +442,8 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
       <canvas id="shot" role="img" aria-label="Live preview of the beautified screenshot"></canvas>
       <canvas id="overlay" aria-hidden="true"></canvas>
     </div>
+    <p class="vh" id="cellLive" aria-live="polite"></p>
+    <p class="vh" id="cellEmpty"></p>
 
     <div class="empty-ui" id="emptyUI">
       <div class="glyph" aria-hidden="true"></div>
@@ -508,6 +512,11 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
         <div class="field">
           <div class="field-head"><span class="field-head-label" id="ratioLbl" style="font-size:12.5px">Canvas ratio</span></div>
           <div class="seg" id="ratioSeg" role="group" aria-labelledby="ratioLbl"></div>
+        </div>
+
+        <div class="field">
+          <div class="field-head"><span class="field-head-label" id="layoutLbl" style="font-size:12.5px">Layout</span></div>
+          <div class="seg" id="layoutSeg" role="group" aria-labelledby="layoutLbl"></div>
         </div>
       </section>
 
@@ -579,7 +588,7 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
 </div>
 
 <div class="veil" id="veil" aria-hidden="true">
-  <div class="frame"><strong>Drop it anywhere</strong><span>The new screenshot replaces the current one</span></div>
+  <div class="frame"><strong>Drop it anywhere</strong><span id="veilSub">The new screenshot replaces the current one</span></div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite">
@@ -659,7 +668,15 @@ var RATIOS = [
   { id:'2x1',  label:'2:1',  v:2,    hint:'2:1 — X / Twitter post and link-card size' }
 ];
 
+/* Layouts are a cols×rows grid of cells. Only the entries listed here ship;
+   the layout geometry handles any grid, so a later four-up is a table row. */
+var LAYOUTS = [
+  { id:'single', label:'Single', cols:1, rows:1, hint:'One screenshot' },
+  { id:'two-up', label:'Two-up', cols:2, rows:1, hint:'Two screenshots side by side — before and after' }
+];
+
 var DEFAULTS = {
+  layout:  'single',
   padding: 6.5,       /* % of the image's longest edge */
   radius:  42,        /* 0-100 → % of the image's shortest edge, ×0.06 */
   shadow:  55,        /* 0-100 */
@@ -672,6 +689,9 @@ var DEFAULTS = {
   color:   '#FF453A',   /* annotation colour */
   weight:  46           /* 10-100 → % of the shortest edge, ×0.016 */
 };
+/* Reset restores the look, not the workspace: the layout is where the user is
+   working, so it stays put. */
+var RESET_SKIP = ['layout'];
 
 var TOOLS = [
   { id:'select',  label:'Select',  key:'v', svg:'<path d="M4.5 2.2 12.6 8.4l-4.1.5-1.9 4z"/>' },
@@ -692,19 +712,75 @@ var MAX_AREA = 60e6;         /* ~240 MB of RGBA — beyond this, engines start f
    ═══════════════════════════════════════════════════════════════════════ */
 
 var state = load();
-var source = null;      /* { img, w, h, name } */
-var sourceRev = 0;
 
-/* Editing state lives outside `state` on purpose: it is meaningless without the
-   image, and the image is never persisted. All coordinates below are in the
-   SOURCE image's own pixels, so a shape stays anchored to what it points at
-   through cropping, ratio changes and either export scale. */
+function layoutById (id) {
+  for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
+  return null;
+}
+function activeLayout () { return layoutById(state.layout) || LAYOUTS[0]; }
+function visibleCount () { var l = activeLayout(); return l.cols * l.rows; }
+
+/* One cell per slot. The image is never persisted, and each cell's editing
+   state (crop, shapes, caches) is meaningless without its image, so all of it
+   lives here rather than in `state`. Coordinates are in the cell's own SOURCE
+   pixels, so a shape stays anchored to what it points at through cropping,
+   ratio changes, layout changes and either export scale. */
+function emptyCache () { return { key:'', canvas:null }; }
+function makeCell () {
+  return {
+    source:null,          /* { img, w, h, name } */
+    rev:0,                /* bumped on every load/clear; part of both cache keys */
+    crop:null,            /* {x,y,w,h} in source px, or null */
+    shapes:[],            /* {type,x1,y1,x2,y2,color,weight} */
+    art:emptyCache(),
+    cropCache:emptyCache()
+  };
+}
+var cells = [];
+/* the active layout always has a cell object per visible slot — at boot (the
+   layout is restored from localStorage) and on every switch */
+function ensureCells (n) { while (cells.length < n) cells.push(makeCell()); }
+ensureCells(visibleCount());
+var active = 0;
+function cur () { return cells[active]; }
+function anyFilled () {
+  for (var i = 0; i < visibleCount(); i++) if (cells[i] && cells[i].source) return true;
+  return false;
+}
+/* "left" / "right" in two-up; nothing in single layout, where there is no slot to name */
+function slotName (idx) {
+  var lay = activeLayout();
+  if (lay.cols * lay.rows === 1) return '';
+  if (lay.rows === 1) return ['left', 'right', 'third', 'fourth'][idx] || ('slot ' + (idx + 1));
+  return ['top-left', 'top-right', 'bottom-left', 'bottom-right'][idx] || ('slot ' + (idx + 1));
+}
+function intoSlot (idx) { var n = slotName(idx); return n ? ' into ' + n : ''; }
+
+/* After a load lands in slot `idx`, the active slot moves on to the next empty
+   visible one so a second paste fills the pair — or stays put if none is empty. */
+function advanceActive (idx) {
+  var n = visibleCount();
+  for (var i = 1; i < n; i++) { var j = (idx + i) % n; if (!cells[j].source) { active = j; return; } }
+  active = idx;
+}
+
+/* Every artwork-cache reset goes through here — one cell, or all of them. */
+function invalidate (c) {
+  if (c) { c.art = emptyCache(); return; }
+  for (var i = 0; i < cells.length; i++) cells[i].art = emptyCache();
+}
+
+/* first empty slot among the first n, or -1 */
+function firstEmpty (n) {
+  for (var i = 0; i < n; i++) if (!cells[i].source) return i;
+  return -1;
+}
+function cap (str) { return str.charAt(0).toUpperCase() + str.slice(1); }
+
 var tool = 'select';
-var crop = null;        /* {x,y,w,h} in source px, or null */
-var cropping = false;   /* in crop mode the full frame is shown, crop applied on exit */
-var shapes = [];        /* {type,x1,y1,x2,y2,color,weight} */
-var draft = null;       /* the shape currently being dragged out */
-var selected = -1;
+var cropping = false;   /* in crop mode the active cell shows its full frame, crop applied on exit */
+var draft = null;       /* the shape currently being dragged out, in the active cell */
+var selected = -1;      /* index into the active cell's shapes */
 var history = [];
 var view = null;        /* geometry of the last preview paint, for hit-testing */
 
@@ -720,6 +796,7 @@ function load () {
   } catch (e) { /* private mode / disabled storage — defaults are fine */ }
   if (!bgById(s.bg)) s.bg = DEFAULTS.bg;
   if (!RATIOS.some(function (r) { return r.id === s.ratio; })) s.ratio = DEFAULTS.ratio;
+  if (!LAYOUTS.some(function (l) { return l.id === s.layout; })) s.layout = DEFAULTS.layout;
   if (s.scale !== 1 && s.scale !== 2) s.scale = DEFAULTS.scale;
   if (!/^#[0-9a-f]{6}$/i.test(s.custom)) s.custom = DEFAULTS.custom;
   return s;
@@ -876,18 +953,17 @@ function drawGrain (g, W, H, S) {
 
 /* ── artwork (the rounded, clipped screenshot) ─────────────────────────── */
 
-var artCache = { key:'', canvas:null };
-var cropCache = { key:'', canvas:null };
-
-/* A cropped region is lifted out at native size once and cached, so that
-   repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
-function croppedSource (C) {
-  if (C.sx === 0 && C.sy === 0 && C.iw === source.w && C.ih === source.h) return source.img;
-  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
-  if (cropCache.key === key && cropCache.canvas) return cropCache.canvas;
+/* A cropped region is lifted out at native size once and cached per cell, so
+   that repeatedly re-deriving the artwork (a radius drag, say) never re-crops. */
+function croppedSource (cell, C) {
+  var src = cell.source;
+  if (C.sx === 0 && C.sy === 0 && C.iw === src.w && C.ih === src.h) return src.img;
+  var key = cell.rev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih;
+  var cc = cell.cropCache;
+  if (cc.key === key && cc.canvas) return cc.canvas;
   var c = makeCanvas(C.iw, C.ih), g = c.getContext('2d');
-  g.drawImage(source.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
-  cropCache.key = key; cropCache.canvas = c;
+  g.drawImage(src.img, C.sx, C.sy, C.iw, C.ih, 0, 0, C.iw, C.ih);
+  cc.key = key; cc.canvas = c;
   return c;
 }
 
@@ -904,19 +980,21 @@ function downscaleSource (img, dw, dh) {
   return cur;
 }
 
-function getArtwork (L, S) {
-  var C = L.C;
-  var aw = Math.max(1, Math.round(L.iw * S)), ah = Math.max(1, Math.round(L.ih * S));
+function getArtwork (slot, L, S) {
+  var cell = slot.cell, C = slot.C;
+  var aw = Math.max(1, Math.round(slot.iw * S)), ah = Math.max(1, Math.round(slot.ih * S));
   var r = Math.min(L.radius * S, Math.min(aw, ah) / 2);
-  var key = sourceRev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
+  var key = cell.rev + '|' + C.sx + ',' + C.sy + ',' + C.iw + ',' + C.ih +
             '|' + aw + 'x' + ah + '|' + r.toFixed(2) + '|' + (state.edge ? 1 : 0);
-  if (artCache.key === key && artCache.canvas) return artCache.canvas;
+  var cache = cell.art;
+  if (cache.key === key && cache.canvas) return cache.canvas;
 
   var c = makeCanvas(aw, ah), g = c.getContext('2d');
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
 
-  var src = (aw < L.iw * 0.6) ? downscaleSource(croppedSource(C), aw, ah) : source.img;
-  var heavy = src !== source.img;
+  var img = cell.source.img;
+  var src = (aw < C.iw * 0.6) ? downscaleSource(croppedSource(cell, C), aw, ah) : img;
+  var heavy = src !== img;
 
   g.save();
   roundRectPath(g, 0, 0, aw, ah, r);
@@ -935,7 +1013,7 @@ function getArtwork (L, S) {
     g.restore();
   }
 
-  artCache.key = key; artCache.canvas = c;
+  cache.key = key; cache.canvas = c;
   return c;
 }
 
@@ -947,7 +1025,7 @@ function getArtwork (L, S) {
 function shadowLayers (L) {
   var t = state.shadow / 100;
   if (t <= 0) return [];
-  var base = Math.max(L.iw, L.ih);
+  var base = Math.max(L.cellW, L.cellH);
   var k = Math.pow(t, 0.8);
   var layers = [
     { blur: base * (0.040 + 0.100 * t), dy: base * (0.012 + 0.045 * t), a: 0.30 * k },
@@ -998,28 +1076,29 @@ function drawShadow (g, art, ax, ay, L, S) {
    invalidates the (expensive) artwork cache.
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Weight is relative to the shared cell box, so both cells' strokes match. */
 function strokeWidth (L, shape) {
-  return (shape.weight / 100) * 0.016 * Math.min(L.iw, L.ih);
+  return (shape.weight / 100) * 0.016 * Math.min(L.cellW, L.cellH);
 }
 
-function shapeList () {
-  return draft ? shapes.concat([draft]) : shapes;
+function shapeList (cell) {
+  return (draft && cell === cur()) ? cell.shapes.concat([draft]) : cell.shapes;
 }
 
-/* source px → output px */
-function mapPoint (L, S, ax, ay, x, y) {
-  return [ax + (x - L.C.sx) * S, ay + (y - L.C.sy) * S];
+/* a cell's source px → output px (k scales the cell's source into cell units) */
+function mapPoint (slot, S, ax, ay, x, y) {
+  return [ax + (x - slot.C.sx) * slot.k * S, ay + (y - slot.C.sy) * slot.k * S];
 }
 
-function drawShapes (g, L, S, ax, ay) {
-  var list = shapeList();
+function drawShapes (g, slot, L, S, ax, ay) {
+  var cell = slot.cell, list = shapeList(cell);
   if (!list.length) return;
 
   for (var i = 0; i < list.length; i++) {
     var s = list[i];
     var w = Math.max(1, strokeWidth(L, s) * S);
-    var a = mapPoint(L, S, ax, ay, s.x1, s.y1);
-    var b = mapPoint(L, S, ax, ay, s.x2, s.y2);
+    var a = mapPoint(slot, S, ax, ay, s.x1, s.y1);
+    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
 
     g.save();
     g.strokeStyle = s.color; g.fillStyle = s.color;
@@ -1083,42 +1162,78 @@ function drawArrow (g, x1, y1, x2, y2, w) {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    4 · LAYOUT + PAINT
-   Composition units == the source image's own pixels. `S` is output pixels
-   per composition unit: 1 or 2 for export, fit×dpr for the preview. Preview
-   and export run the same code, so they cannot drift apart.
+   Composition units are "cell units": the widest filled cell's own source
+   pixels. Every filled cell is scaled to that width by k = cellW / contentW,
+   so in single layout k = 1 and a unit is a source pixel, exactly as before.
+   `S` is output pixels per unit: 1 or 2 for export, fit×dpr for the preview.
+   Preview and export run the same code, so they cannot drift apart.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* The visible region of the source. While cropping, the full frame is shown so
    you can see what you are excluding. */
-function content () {
-  if (!source) return null;
-  var c = (!cropping && crop) ? crop : null;
+function content (cell) {
+  if (!cell || !cell.source) return null;
+  var showFull = cropping && cell === cur();
+  var c = (!showFull && cell.crop) ? cell.crop : null;
   return c ? { sx:c.x, sy:c.y, iw:c.w, ih:c.h }
-           : { sx:0, sy:0, iw:source.w, ih:source.h };
+           : { sx:0, sy:0, iw:cell.source.w, ih:cell.source.h };
 }
 
 function layout () {
-  if (!source) return null;
-  var C = content();
-  var iw = C.iw, ih = C.ih;
-  var pad = (state.padding / 100) * Math.max(iw, ih);
-  var W = iw + pad * 2, H = ih + pad * 2;
+  var lay = activeLayout(), n = lay.cols * lay.rows;
+  var slots = [], cellW = 0;
+  for (var i = 0; i < n; i++) {
+    var C = content(cells[i]);
+    if (!C) continue;
+    slots.push({ idx:i, cell:cells[i], C:C });
+    if (C.iw > cellW) cellW = C.iw;
+  }
+  if (!slots.length) return null;
+
+  /* Equal-width cells: the widest content is 1:1, narrower content scales up
+     to match, and the cell height is the tallest scaled content. */
+  var cellH = 0;
+  for (var j = 0; j < slots.length; j++) {
+    var sl = slots[j];
+    sl.k = cellW / sl.C.iw;
+    sl.iw = sl.C.iw * sl.k; sl.ih = sl.C.ih * sl.k;
+    if (sl.ih > cellH) cellH = sl.ih;
+  }
+
+  /* Padding, radius, shadow and stroke all measure against the shared cell
+     box, so both cells carry identical treatment; the gutter is the padding. */
+  var pad = (state.padding / 100) * Math.max(cellW, cellH);
+  var gridW = lay.cols * cellW + (lay.cols - 1) * pad;
+  var gridH = lay.rows * cellH + (lay.rows - 1) * pad;
+  var W = gridW + pad * 2, H = gridH + pad * 2;
 
   var ratio = null;
-  for (var i = 0; i < RATIOS.length; i++) if (RATIOS[i].id === state.ratio) ratio = RATIOS[i].v;
+  for (var r = 0; r < RATIOS.length; r++) if (RATIOS[r].id === state.ratio) ratio = RATIOS[r].v;
   if (ratio) {
     if (W / H < ratio) W = H * ratio; else H = W / ratio;   /* grow, never crop */
   }
 
+  var gx = (W - gridW) / 2, gy = (H - gridH) / 2;
+  var rects = [];
+  for (var q = 0; q < n; q++) {
+    var col = q % lay.cols, row = Math.floor(q / lay.cols);
+    rects.push({ idx:q, x:gx + col * (cellW + pad), y:gy + row * (cellH + pad), w:cellW, h:cellH });
+  }
+  for (var t = 0; t < slots.length; t++) {
+    var st = slots[t], rc = rects[st.idx];
+    st.x = rc.x;                              /* content fills the cell width */
+    st.y = rc.y + (cellH - st.ih) / 2;        /* and sits centred vertically */
+  }
+
   return {
-    W:W, H:H, iw:iw, ih:ih, pad:pad, C:C,
-    x:(W - iw) / 2, y:(H - ih) / 2,
-    radius:(state.radius / 100) * 0.06 * Math.min(iw, ih)
+    W:W, H:H, pad:pad, cellW:cellW, cellH:cellH, lay:lay,
+    slots:slots, rects:rects,
+    radius:(state.radius / 100) * 0.06 * Math.min(cellW, cellH)
   };
 }
 
 function paint (canvas, S, opts) {
-  var L = layout();
+  var L = (opts && opts.L) || layout();
   if (!L) return null;
 
   var OW = Math.max(1, Math.round(L.W * S));
@@ -1133,33 +1248,44 @@ function paint (canvas, S, opts) {
   drawBackground(g, OW, OH, bg);
   if (!(opts && opts.noGrain) && state.grain && bg.kind !== 'transparent') drawGrain(g, OW, OH, S);
 
-  var art = getArtwork(L, S);
-  var ax = Math.round(L.x * S), ay = Math.round(L.y * S);
-  drawShadow(g, art, ax, ay, L, S);
-
-  /* Outer half of the edge treatment: a light screenshot on a light background
-     has no boundary otherwise. Drawn under the artwork so only the outside
-     half of the stroke survives. */
-  if (state.edge) {
-    var lw = Math.max(1, 1.1 * S);
-    g.save();
-    g.lineWidth = lw;
-    g.strokeStyle = 'rgba(0,0,0,.10)';
-    roundRectPath(g, ax - lw / 2, ay - lw / 2, art.width + lw, art.height + lw, L.radius * S + lw / 2);
-    g.stroke();
-    g.restore();
+  var arts = [], i, sl;
+  for (i = 0; i < L.slots.length; i++) {
+    sl = L.slots[i];
+    arts.push({ slot:sl, art:getArtwork(sl, L, S), ax:Math.round(sl.x * S), ay:Math.round(sl.y * S) });
   }
 
-  g.drawImage(art, ax, ay);
+  /* Every shadow lands before any artwork: a shadow's blur can spread across
+     the whole gutter, and painting it after the neighbour's image would darken
+     that image. */
+  for (i = 0; i < arts.length; i++) drawShadow(g, arts[i].art, arts[i].ax, arts[i].ay, L, S);
 
-  /* Annotations are clipped to the artwork, so a shape dragged past the edge
-     stops at the image rather than bleeding onto the background. */
-  if (shapeList().length) {
-    g.save();
-    roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
-    g.clip();
-    drawShapes(g, L, S, ax, ay);
-    g.restore();
+  for (i = 0; i < arts.length; i++) {
+    var a = arts[i], art = a.art, ax = a.ax, ay = a.ay;
+
+    /* Outer half of the edge treatment: a light screenshot on a light background
+       has no boundary otherwise. Drawn under the artwork so only the outside
+       half of the stroke survives. */
+    if (state.edge) {
+      var lw = Math.max(1, 1.1 * S);
+      g.save();
+      g.lineWidth = lw;
+      g.strokeStyle = 'rgba(0,0,0,.10)';
+      roundRectPath(g, ax - lw / 2, ay - lw / 2, art.width + lw, art.height + lw, L.radius * S + lw / 2);
+      g.stroke();
+      g.restore();
+    }
+
+    g.drawImage(art, ax, ay);
+
+    /* Annotations are clipped to their own artwork, so a shape dragged past the
+       edge stops at the image rather than bleeding onto the background. */
+    if (shapeList(a.slot.cell).length) {
+      g.save();
+      roundRectPath(g, ax, ay, art.width, art.height, L.radius * S);
+      g.clip();
+      drawShapes(g, a.slot, L, S, ax, ay);
+      g.restore();
+    }
   }
 
   return { W:OW, H:OH };
@@ -1182,11 +1308,12 @@ function requestRender () {
 function render () {
   var L = layout();
   stage.classList.toggle('empty', !L);
-  syncOutputs();
+  syncOutputs(L);
   /* here rather than only at the mutation sites, so the crop dimensions tick
      live during a drag and the Undo/Clear buttons can never read stale */
   syncEditUI();
-  if (!L) return;
+  syncCellA11y();     /* also on the empty render, so stale slot text never lingers */
+  if (!L) { view = null; return; }
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
   var cs = getComputedStyle(stage);
@@ -1198,16 +1325,26 @@ function render () {
   var dpr = window.devicePixelRatio || 1;
 
   var S = fit * dpr;
-  paint(shot, S);
+  paint(shot, S, { L:L });
   /* floor, so a rounding overshoot can never hit max-width:100% and squash the aspect */
   var cssW = Math.floor(L.W * fit), cssH = Math.floor(L.H * fit);
   shot.style.width  = cssW + 'px';
   shot.style.height = cssH + 'px';
   shot.classList.toggle('alpha', activeBg().kind === 'transparent');
 
-  view = { L:L, S:S, fit:fit, dpr:dpr,
-           ax:Math.round(L.x * S), ay:Math.round(L.y * S),
-           aw:Math.round(L.iw * S), ah:Math.round(L.ih * S) };
+  /* one rect per slot in canvas pixels, plus the filled slots' geometry, so
+     hit-testing and the overlay can work per cell */
+  view = { L:L, S:S, fit:fit, dpr:dpr, rects:[], slots:[] };
+  for (var i = 0; i < L.rects.length; i++) {
+    var rc = L.rects[i];
+    view.rects.push({ idx:rc.idx, x:rc.x * S, y:rc.y * S, w:rc.w * S, h:rc.h * S });
+  }
+  for (var j = 0; j < L.slots.length; j++) {
+    var sl = L.slots[j];
+    view.slots.push({ idx:sl.idx, slot:sl,
+                      ax:Math.round(sl.x * S), ay:Math.round(sl.y * S),
+                      aw:Math.round(sl.iw * S), ah:Math.round(sl.ih * S) });
+  }
 
   overlay.style.width = cssW + 'px';
   overlay.style.height = cssH + 'px';
@@ -1218,13 +1355,57 @@ function render () {
 
 /* ── overlay: crop frame + selection chrome (never exported) ───────────── */
 
+var dragHover = -1;      /* slot under a file being dragged over the stage, or -1 */
+
 function paintOverlay () {
   if (!view) return;
   var g = overlay.getContext('2d');
   g.clearRect(0, 0, overlay.width, overlay.height);
   var S = view.S, L = view.L;
 
-  if (cropping) {
+  if (!cropping && visibleCount() > 1) {
+    var u0 = view.dpr;
+    for (var ri = 0; ri < view.rects.length; ri++) {
+      var rr = view.rects[ri], filled = !!(cells[rr.idx] && cells[rr.idx].source);
+      if (!filled) {
+        /* dashed placeholder, drawn dark-then-light like the crop guides */
+        var ins = Math.max(8 * u0, rr.w * 0.04);
+        g.save();
+        g.setLineDash([10 * u0, 8 * u0]);
+        g.lineWidth = 3 * u0; g.strokeStyle = 'rgba(0,0,0,.35)';
+        roundRectPath(g, rr.x + ins, rr.y + ins, rr.w - ins * 2, rr.h - ins * 2, 12 * u0); g.stroke();
+        g.lineWidth = 1.25 * u0; g.strokeStyle = 'rgba(255,255,255,.55)';
+        roundRectPath(g, rr.x + ins, rr.y + ins, rr.w - ins * 2, rr.h - ins * 2, 12 * u0); g.stroke();
+        g.setLineDash([]);
+        var fs = Math.max(11, Math.min(15, rr.w / 28)) * u0;
+        g.font = '500 ' + fs + 'px ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+        g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillStyle = 'rgba(0,0,0,.45)'; g.fillText('Paste or drop here', rr.x + rr.w / 2, rr.y + rr.h / 2 + 1.5 * u0);
+        g.fillStyle = 'rgba(255,255,255,.85)'; g.fillText('Paste or drop here', rr.x + rr.w / 2, rr.y + rr.h / 2);
+        g.restore();
+      }
+      if (rr.idx === active && dragHover < 0) {
+        /* the active slot: a solid amber hairline, distinct from the dashed drop target */
+        g.save();
+        g.lineWidth = 1.5 * u0; g.strokeStyle = 'rgba(232,160,92,.9)';
+        g.strokeRect(rr.x + 0.75 * u0, rr.y + 0.75 * u0, rr.w - 1.5 * u0, rr.h - 1.5 * u0);
+        g.restore();
+      }
+    }
+  }
+
+  if (dragHover >= 0 && dragHover < view.rects.length) {
+    var dr = view.rects[dragHover], du = view.dpr, inset = 3 * du;
+    g.save();
+    g.fillStyle = 'rgba(232,160,92,.12)';
+    g.fillRect(dr.x, dr.y, dr.w, dr.h);
+    g.strokeStyle = 'rgba(232,160,92,.95)'; g.lineWidth = 2 * du;
+    g.setLineDash([8 * du, 6 * du]);
+    g.strokeRect(dr.x + inset, dr.y + inset, dr.w - inset * 2, dr.h - inset * 2);
+    g.restore();
+  }
+
+  if (cropping && activeSlot()) {
     var r = cropRectOnCanvas();
     g.fillStyle = 'rgba(6,6,8,.58)';
     g.fillRect(0, 0, overlay.width, overlay.height);
@@ -1256,10 +1437,11 @@ function paintOverlay () {
     return;
   }
 
-  if (selected >= 0 && selected < shapes.length) {
+  var shapes = cur().shapes, vs = activeSlot();
+  if (vs && selected >= 0 && selected < shapes.length) {
     var s = shapes[selected];
-    var a = mapPoint(L, S, view.ax, view.ay, s.x1, s.y1);
-    var b = mapPoint(L, S, view.ax, view.ay, s.x2, s.y2);
+    var a = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x1, s.y1);
+    var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
     var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
     var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
     var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
@@ -1271,12 +1453,31 @@ function paintOverlay () {
   }
 }
 
+/* which visible slot a client point is over, or -1 */
+function cellAt (clientX, clientY) {
+  if (!view) return -1;
+  var r = overlay.getBoundingClientRect();
+  var px = (clientX - r.left) * view.dpr, py = (clientY - r.top) * view.dpr;
+  for (var i = 0; i < view.rects.length; i++) {
+    var c = view.rects[i];
+    if (px >= c.x && px <= c.x + c.w && py >= c.y && py <= c.y + c.h) return c.idx;
+  }
+  return -1;
+}
+
+/* the active cell's geometry in the last preview paint, or null if it is empty */
+function activeSlot () {
+  if (!view) return null;
+  for (var i = 0; i < view.slots.length; i++) if (view.slots[i].idx === active) return view.slots[i];
+  return null;
+}
+
 function cropRectOnCanvas () {
-  var r = crop || { x:0, y:0, w:source.w, h:source.h };
-  var S = view.S;
+  var r = cropOrFull(), vs = activeSlot();
+  var S = view.S * vs.slot.k;
   return {
-    x:Math.round(view.ax + r.x * S), y:Math.round(view.ay + r.y * S),
-    w:Math.round(r.w * S),           h:Math.round(r.h * S)
+    x:Math.round(vs.ax + r.x * S), y:Math.round(vs.ay + r.y * S),
+    w:Math.round(r.w * S),         h:Math.round(r.h * S)
   };
 }
 
@@ -1295,18 +1496,37 @@ function handlePoints (r) {
 var MIN_CROP = 24;
 var drag = null;
 
+/* One snapshot covers every cell, so a single shared stack walks edits made in
+   either slot in the order they happened. */
+function snapshot () {
+  return JSON.stringify({
+    cells:cells.map(function (c) { return { crop:c.crop, shapes:c.shapes }; }),
+    active:active
+  });
+}
 function pushHistory () {
-  history.push(JSON.stringify({ crop:crop, shapes:shapes }));
+  history.push(snapshot());
   if (history.length > 60) history.shift();
   syncEditUI();
 }
 
 function undo () {
-  if (!history.length) return;
+  if (!history.length || drag) return;
   var prev = JSON.parse(history.pop());
-  crop = prev.crop; shapes = prev.shapes;
+  var changed = -1;
+  for (var i = 0; i < cells.length && i < prev.cells.length; i++) {
+    var before = JSON.stringify({ crop:cells[i].crop, shapes:cells[i].shapes });
+    var after = JSON.stringify(prev.cells[i]);
+    if (changed < 0 && before !== after) changed = i;
+    cells[i].crop = prev.cells[i].crop; cells[i].shapes = prev.cells[i].shapes;
+  }
+  /* the highlight follows the change — but only to a cell that is on screen */
+  if (changed >= 0 && changed < visibleCount() && changed !== active) {
+    if (cropping) setTool('select');                  /* close the open crop session before leaving its cell */
+    active = changed;
+  }
   selected = -1; draft = null;
-  artCache.key = '';
+  invalidate();
   syncEditUI(); requestRender();
 }
 
@@ -1315,25 +1535,28 @@ function clamp (v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 /* Crop rects are kept on whole source pixels: a fractional source rect makes
    drawImage resample the region instead of lifting it out 1:1. */
 function setCrop (x, y, w, h) {
-  x = Math.round(clamp(x, 0, source.w));
-  y = Math.round(clamp(y, 0, source.h));
-  crop = {
+  var c = cur(), src = c.source;
+  x = Math.round(clamp(x, 0, src.w));
+  y = Math.round(clamp(y, 0, src.h));
+  c.crop = {
     x:x, y:y,
-    w:Math.max(0, Math.round(Math.min(w, source.w - x))),
-    h:Math.max(0, Math.round(Math.min(h, source.h - y)))
+    w:Math.max(0, Math.round(Math.min(w, src.w - x))),
+    h:Math.max(0, Math.round(Math.min(h, src.h - y)))
   };
 }
 
-/* client coords → source-image px */
-function toSource (e) {
+/* client coords → a cell's source-image px (the active cell unless given) */
+function toSource (e, vs) {
+  vs = vs || activeSlot();
   var r = overlay.getBoundingClientRect();
   var cx = (e.clientX - r.left) / view.fit;      /* → composition units */
   var cy = (e.clientY - r.top) / view.fit;
-  return { x:cx - view.L.x + view.L.C.sx, y:cy - view.L.y + view.L.C.sy };
+  var sl = vs.slot;
+  return { x:(cx - sl.x) / sl.k + sl.C.sx, y:(cy - sl.y) / sl.k + sl.C.sy };
 }
 
-/* how many source px a comfortable 10 css px target is worth right now */
-function tolerance () { return 10 / view.fit; }
+/* how many of a cell's source px a comfortable 10 css px target is worth */
+function tolerance (vs) { vs = vs || activeSlot(); return 10 / (view.fit * (vs ? vs.slot.k : 1)); }
 
 function hitHandle (e) {
   var r = cropRectOnCanvas(), pts = handlePoints(r);
@@ -1354,15 +1577,18 @@ function distToSegment (px, py, x1, y1, x2, y2) {
 }
 
 /* Shapes are stroked outlines, so "hit" means near the outline — topmost first. */
-function hitShape (p) {
-  var L = view.L;
+function hitShape (p, vs) {
+  vs = vs || activeSlot();
+  var L = view.L, shapes = vs.slot.cell.shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
-    var tol = Math.max(tolerance(), strokeWidth(L, s));
+    /* p and tol are in this cell's source px; strokeWidth is in cell units */
+    var sw = strokeWidth(L, s) / vs.slot.k;
+    var tol = Math.max(tolerance(vs), sw);
     if (s.type === 'arrow') {
       /* the head is ~6× the shaft across, so a shaft-width tolerance would
          leave the most clickable part of the arrow unclickable */
-      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, strokeWidth(L, s) * 2.5)) return i;
+      if (distToSegment(p.x, p.y, s.x1, s.y1, s.x2, s.y2) <= Math.max(tol, sw * 2.5)) return i;
       continue;
     }
     var x = Math.min(s.x1, s.x2), y = Math.min(s.y1, s.y2);
@@ -1384,8 +1610,39 @@ function hitShape (p) {
   return -1;
 }
 
+/* A Select press that misses the active cell's shapes still finds a shape in
+   another cell: that cell becomes active, then the shape is selected. */
+function hitShapeAny (e) {
+  var vs = activeSlot();
+  if (vs) { var i = hitShape(toSource(e, vs), vs); if (i >= 0) return { idx:active, i:i }; }
+  for (var j = 0; j < view.slots.length; j++) {
+    var o = view.slots[j];
+    if (o.idx === active) continue;
+    var k = hitShape(toSource(e, o), o);
+    if (k >= 0) return { idx:o.idx, i:k };
+  }
+  return null;
+}
+
 overlay.addEventListener('pointerdown', function (e) {
   if (!view || e.button !== 0) return;
+
+  /* which slot was pressed: an empty one only becomes active (and drops to
+     Select — there is nothing to crop or draw on); a filled one becomes
+     active and the gesture continues in it; the background belongs to the
+     active slot, so a press on the padding still clamps to its image. */
+  var idx = cellAt(e.clientX, e.clientY);
+  if (idx >= 0 && !cells[idx].source) {
+    active = idx; selected = -1; draft = null;
+    setTool('select');                       /* also commits an open crop */
+    return;
+  }
+  if (idx >= 0 && idx !== active) {
+    if (cropping) { selectCell(idx); return; }   /* commit, switch, re-open crop there; the press itself is the switch */
+    active = idx; selected = -1; draft = null; requestRender();
+  }
+  if (!activeSlot()) return;
+
   overlay.setPointerCapture(e.pointerId);
   var p = toSource(e);
 
@@ -1395,26 +1652,28 @@ overlay.addEventListener('pointerdown', function (e) {
     if (h) { drag = { kind:'crop-resize', edge:h, start:p, orig:cropOrFull() }; return; }
     /* Only an explicit selection can be dragged around. With no crop set there
        is nothing to move, so a press inside the image starts a fresh one. */
-    var c = crop;
+    var c = cur().crop;
     if (c && p.x > c.x && p.x < c.x + c.w && p.y > c.y && p.y < c.y + c.h) {
       drag = { kind:'crop-move', start:p, orig:{ x:c.x, y:c.y, w:c.w, h:c.h } };
     } else {
       setCrop(p.x, p.y, 0, 0);
-      drag = { kind:'crop-new', start:{ x:crop.x, y:crop.y } };
+      drag = { kind:'crop-new', start:{ x:cur().crop.x, y:cur().crop.y } };
     }
     requestRender();
     return;
   }
 
   if (tool === 'select') {
-    selected = hitShape(p);
+    var hit = hitShapeAny(e);
+    if (hit && hit.idx !== active) { active = hit.idx; requestRender(); }
+    selected = hit ? hit.i : -1;
     paintOverlay();
     syncEditUI();
     return;
   }
 
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
-  var C = view.L.C;
+  var C = activeSlot().slot.C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
   drag = { kind:'draw' };
@@ -1425,7 +1684,7 @@ overlay.addEventListener('pointermove', function (e) {
   var p = toSource(e);
 
   if (drag.kind === 'draw') {
-    var C = view.L.C;
+    var C = activeSlot().slot.C;
     draft.x2 = clamp(p.x, C.sx, C.sx + C.iw);
     draft.y2 = clamp(p.y, C.sy, C.sy + C.ih);
     if (e.shiftKey && draft.type !== 'arrow') {          /* shift = square / circle */
@@ -1437,9 +1696,10 @@ overlay.addEventListener('pointermove', function (e) {
     return;
   }
 
+  var src = cur().source;
   if (drag.kind === 'crop-new') {
-    var x1 = clamp(drag.start.x, 0, source.w), y1 = clamp(drag.start.y, 0, source.h);
-    var x2 = clamp(p.x, 0, source.w), y2 = clamp(p.y, 0, source.h);
+    var x1 = clamp(drag.start.x, 0, src.w), y1 = clamp(drag.start.y, 0, src.h);
+    var x2 = clamp(p.x, 0, src.w), y2 = clamp(p.y, 0, src.h);
     setCrop(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
     requestRender();
     return;
@@ -1447,8 +1707,8 @@ overlay.addEventListener('pointermove', function (e) {
 
   if (drag.kind === 'crop-move') {
     var o = drag.orig;
-    setCrop(clamp(o.x + (p.x - drag.start.x), 0, source.w - o.w),
-            clamp(o.y + (p.y - drag.start.y), 0, source.h - o.h), o.w, o.h);
+    setCrop(clamp(o.x + (p.x - drag.start.x), 0, src.w - o.w),
+            clamp(o.y + (p.y - drag.start.y), 0, src.h - o.h), o.w, o.h);
     requestRender();
     return;
   }
@@ -1456,10 +1716,10 @@ overlay.addEventListener('pointermove', function (e) {
   if (drag.kind === 'crop-resize') {
     var g = drag.orig, edge = drag.edge;
     var l = g.x, t = g.y, rr = g.x + g.w, bb = g.y + g.h;
-    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, source.w);
-    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, source.w);
-    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, source.h);
-    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, source.h);
+    if (edge.indexOf('w') >= 0) l  = clamp(p.x, 0, src.w);
+    if (edge.indexOf('e') >= 0) rr = clamp(p.x, 0, src.w);
+    if (edge.indexOf('n') >= 0) t  = clamp(p.y, 0, src.h);
+    if (edge.indexOf('s') >= 0) bb = clamp(p.y, 0, src.h);
     /* normalise rather than clamp against the opposite edge, so dragging a
        handle past its opposite flips the selection the way every crop tool
        does, instead of collapsing to the minimum size */
@@ -1477,16 +1737,17 @@ function endDrag () {
     var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
     if (len < tolerance()) { draft = null; requestRender(); return; }   /* a stray click */
     pushHistory();
-    shapes.push(draft);
+    cur().shapes.push(draft);
     draft = null;
     requestRender();
     return;
   }
 
   /* too small to have been meant, or the whole frame — either way, no crop */
-  if (crop && (crop.w < MIN_CROP || crop.h < MIN_CROP)) crop = null;
-  if (crop && crop.x <= 0 && crop.y <= 0 && crop.w >= source.w && crop.h >= source.h) crop = null;
-  artCache.key = '';
+  var c = cur(), cr = c.crop, src = c.source;
+  if (cr && (cr.w < MIN_CROP || cr.h < MIN_CROP)) c.crop = null;
+  if (cr && cr.x <= 0 && cr.y <= 0 && cr.w >= src.w && cr.h >= src.h) c.crop = null;
+  invalidate(c);
   syncEditUI();
   requestRender();
 }
@@ -1494,40 +1755,76 @@ overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
 
 function cropOrFull () {
-  return crop || { x:0, y:0, w:source.w, h:source.h };
+  var c = cur();
+  return c.crop || { x:0, y:0, w:c.source.w, h:c.source.h };
 }
 
 function setTool (id) {
+  if (id === 'crop' && !cur().source) id = 'select';   /* nothing to crop in an empty slot */
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
-  if (cropping && !crop) {
+  var c = cur();
+  if (cropping && !c.crop) {
     /* open with a sensible starting selection rather than nothing (history
        first — it has to record the state being replaced, not the new one) */
     pushHistory();
-    setCrop(source.w * .12, source.h * .12, source.w * .76, source.h * .76);
+    var src = c.source;
+    setCrop(src.w * .12, src.h * .12, src.w * .76, src.h * .76);
   }
   if (id !== 'select') selected = -1;
   var radio = $('tool-' + id);
   if (radio) radio.checked = true;
   syncEditUI();
-  artCache.key = '';
+  invalidate(c);
   requestRender();
 }
 
-function syncEditUI () {
-  $('cropBar').hidden = !cropping;
-  if (cropping) {
-    var c = cropOrFull();
-    $('cropDims').textContent = fmt(c.w) + ' × ' + fmt(c.h);
-  }
-  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
-  $('clearShapes').setAttribute('aria-disabled', (shapes.length || crop) ? 'false' : 'true');
+/* Make a slot the active one. An open crop is committed first (as Enter
+   would), then re-opened on the target if it holds an image; an empty target
+   drops to Select, since there is nothing to crop. */
+function selectCell (idx) {
+  if (drag) return;                                   /* never mid-gesture: the drag owns draft */
+  if (idx < 0 || idx >= visibleCount() || !cells[idx]) return;
+  var wasCropping = cropping;
+  if (cropping) setTool('select');
+  if (idx !== active) { active = idx; selected = -1; draft = null; }
+  if (wasCropping && cells[idx].source) setTool('crop');
+  syncEditUI(); requestRender();
 }
 
-function resetEditing () {
-  tool = 'select'; cropping = false; crop = null;
-  shapes = []; draft = null; selected = -1; history = [];
-  cropCache.key = ''; cropCache.canvas = null;
+/* The overlay is aria-hidden, so the active slot and any empty slot are also
+   spelled out in text: a live region announces activation changes, and the
+   placeholder copy has a DOM twin while a slot is empty. */
+var lastLive = null, lastEmpty = null;
+function syncCellA11y () {
+  var n = visibleCount(), live = '', empty = [];
+  if (n > 1 && anyFilled()) {
+    live = cap(slotName(active)) + ' cell active';
+    for (var i = 0; i < n; i++) if (!cells[i].source) empty.push(cap(slotName(i)) + ' cell: paste or drop here');
+  }
+  var emptyText = empty.join('. ');
+  if (live !== lastLive) { $('cellLive').textContent = live; lastLive = live; }
+  if (emptyText !== lastEmpty) { $('cellEmpty').textContent = emptyText; lastEmpty = emptyText; }
+}
+
+function syncEditUI () {
+  var c = cur();
+  $('cropBar').hidden = !cropping;
+  if (cropping && c.source) {
+    var r = cropOrFull();
+    $('cropDims').textContent = fmt(r.w) + ' × ' + fmt(r.h);
+  }
+  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop) ? 'false' : 'true');
+}
+
+/* A new image in a cell means that cell's crop and shapes are meaningless; the
+   shared editing state (tool, draft, selection, history) resets with it. */
+function resetEditing (cell) {
+  tool = 'select'; cropping = false;
+  cell.crop = null; cell.shapes = [];
+  cell.cropCache = emptyCache();
+  draft = null; selected = -1; history = [];
   var r = $('tool-select'); if (r) r.checked = true;
   syncEditUI();
 }
@@ -1538,9 +1835,9 @@ function resetEditing () {
 
 function fmt (n) { return Math.round(n).toLocaleString('en-US'); }
 
-function syncOutputs () {
-  var L = layout();
-  var padPx = L ? (state.padding / 100) * Math.max(L.iw, L.ih) : null;
+function syncOutputs (L) {
+  if (L === undefined) L = layout();
+  var padPx = L ? L.pad : null;
   var readouts = {
     padding: L ? fmt(padPx) + ' px' : state.padding.toFixed(1) + '%',
     radius:  L ? fmt(L.radius) + ' px' : Math.round(state.radius) + '%',
@@ -1557,11 +1854,13 @@ function syncOutputs () {
     $(key).setAttribute('aria-valuetext', readouts[key]);
   }
 
-  $('weightOut').value = L ? fmt(Math.max(1, (state.weight / 100) * 0.012 * Math.min(L.iw, L.ih))) + ' px'
+  $('weightOut').value = L ? fmt(Math.max(1, strokeWidth(L, { weight:state.weight }))) + ' px'
                            : Math.round(state.weight) + '%';
   $('weight').setAttribute('aria-valuetext', $('weightOut').value);
 
-  $('metaSrc').textContent = L ? fmt(L.iw) + '×' + fmt(L.ih) + (crop && !cropping ? ' cropped' : '') : '—';
+  $('metaSrc').textContent = L ? L.slots.map(function (sl) {
+    return fmt(sl.C.iw) + '×' + fmt(sl.C.ih) + (sl.cell.crop && !(cropping && sl.cell === cur()) ? ' cropped' : '');
+  }).join(' · ') : '—';
   if (L) {
     var s = exportScale(L);
     $('metaOut').textContent = fmt(L.W * s) + '×' + fmt(L.H * s) + (s !== state.scale ? ' ·' + s + '×' : '');
@@ -1656,10 +1955,18 @@ function renderBudgeted () {
     guard++;
   }
 
+  /* an empty slot exports as bare background; the toast says which */
+  var emptySlots = [];
+  for (var i = 0; i < visibleCount(); i++) if (!cells[i].source) emptySlots.push(slotName(i));
+
   return {
     canvas:canvas, blob:dataUrlToBlob(url), W:canvas.width, H:canvas.height, bytes:bytes,
-    engineFallback:engineFallback, grainDropped:grainDropped, shrunk:shrunk
+    engineFallback:engineFallback, grainDropped:grainDropped, shrunk:shrunk, emptySlots:emptySlots
   };
+}
+
+function exportWarns (r) {
+  return r.engineFallback || r.grainDropped || r.shrunk || r.emptySlots.length > 0;
 }
 
 function fmtBytes (n) {
@@ -1668,6 +1975,7 @@ function fmtBytes (n) {
 
 function budgetNote (r) {
   var bits = [];
+  if (r.emptySlots.length) bits.push(r.emptySlots.join(' and ') + ' slot empty');
   if (r.engineFallback) bits.push('fell back to 1× — 2× exceeds this browser’s canvas limit');
   if (r.grainDropped || r.shrunk) {
     var why = [];
@@ -1685,7 +1993,7 @@ function stamp () {
 
 var lastBlobUrl = null;
 function doExport () {
-  if (!source) return;
+  if (!anyFilled()) return;
   var r;
   try { r = renderBudgeted(); }
   catch (e) { return toast(e.message, 'err'); }
@@ -1697,13 +2005,12 @@ function doExport () {
   a.download = 'screenshot-' + stamp() + '.png';
   document.body.appendChild(a); a.click(); a.remove();
 
-  var warn = r.engineFallback || r.grainDropped || r.shrunk;
-  toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
+  toast('Saved ' + fmt(r.W) + '×' + fmt(r.H) + ' PNG, ' + fmtBytes(r.bytes) + budgetNote(r), exportWarns(r) ? 'warn' : 'ok');
   setTimeout(function () { if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; } }, 60000);
 }
 
 function doCopy () {
-  if (!source) return;
+  if (!anyFilled()) return;
 
   if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') {
     return copyFailed('This browser can’t write images to the clipboard.');
@@ -1721,8 +2028,7 @@ function doCopy () {
   catch (e) { return copyFailed('Clipboard rejected the image.'); }
 
   navigator.clipboard.write([item]).then(function () {
-    var warn = r.engineFallback || r.grainDropped || r.shrunk;
-    toast('Copied to clipboard, ' + fmtBytes(r.bytes) + budgetNote(r), warn ? 'warn' : 'ok');
+    toast('Copied to clipboard, ' + fmtBytes(r.bytes) + budgetNote(r), exportWarns(r) ? 'warn' : 'ok');
   }).catch(function (err) {
     var why = !window.isSecureContext
       ? 'The clipboard needs a secure context — this page is on file://.'
@@ -1739,24 +2045,45 @@ function copyFailed (why) {
    8 · IMAGE INPUT
    ═══════════════════════════════════════════════════════════════════════ */
 
-function acceptFile (file) {
+function acceptFile (file, idx) {
   if (!file) return;
   if (file.type && file.type.indexOf('image/') !== 0) return toast('That’s not an image file.', 'err');
-  loadImage(file, file.name || 'pasted image');
+  loadImage(file, file.name || 'pasted image', idx);
 }
 
-function loadImage (blob, name) {
-  var done = function (img, w, h) {
-    if (source && source.img && typeof source.img.close === 'function') source.img.close();
-    source = { img:img, w:w, h:h, name:name };
-    sourceRev++;
-    artCache.key = '';
-    resetEditing();     /* a crop or an arrow means nothing against a different image */
-    $('fileChip').hidden = false;
-    $('fileName').textContent = name;
-    render();
-    toast(fmt(w) + '×' + fmt(h) + ' loaded', 'ok');
-  };
+/* The one place an image lands in a cell — the normal decode path and the
+   sample's canvas fallback both end here. */
+function setSource (cell, img, w, h, name) {
+  if (cropping) setTool('select');    /* commit an open crop before anything moves */
+  if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
+  cell.source = { img:img, w:w, h:h, name:name };
+  cell.rev++;
+  invalidate(cell);
+  resetEditing(cell);     /* a crop or an arrow means nothing against a different image */
+  advanceActive(cells.indexOf(cell));
+  syncChip();
+  render();
+}
+
+function syncChip () {
+  var names = [];
+  for (var i = 0; i < visibleCount(); i++) if (cells[i] && cells[i].source) names.push(cells[i].source.name);
+  $('fileChip').hidden = !names.length;
+  $('fileName').textContent = names.join(' · ');
+}
+
+/* land a decoded image in its cell and say where it went */
+function finishLoad (cell, img, w, h, name) {
+  var idx = cells.indexOf(cell);
+  if (idx < 0 || idx >= visibleCount()) { cell = cells[active]; idx = active; }   /* slot parked mid-decode */
+  var into = intoSlot(idx);
+  setSource(cell, img, w, h, name);
+  toast(fmt(w) + '×' + fmt(h) + ' loaded' + into, 'ok');
+}
+
+function loadImage (blob, name, idx) {
+  var cell = cells[idx === undefined ? active : idx];
+  var done = function (img, w, h) { finishLoad(cell, img, w, h, name); };
   var fail = function () { toast('Couldn’t decode that image.', 'err'); };
 
   if (window.createImageBitmap) {
@@ -1771,11 +2098,14 @@ function loadImage (blob, name) {
   }
 }
 
-function clearImage () {
-  if (source && source.img && typeof source.img.close === 'function') source.img.close();
-  source = null; sourceRev++; artCache.key = ''; artCache.canvas = null;
-  resetEditing();
-  $('fileChip').hidden = true;
+function clearImage (idx) {
+  var cell = cells[idx === undefined ? active : idx];
+  if (cropping) setTool('select');
+  if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
+  cell.source = null; cell.rev++;
+  invalidate(cell);
+  resetEditing(cell);
+  syncChip();
   render();
 }
 
@@ -1842,14 +2172,9 @@ function loadSample () {
   var w2 = [1032, 940, 998, 780];
   for (var q = 0; q < w2.length; q++) { roundRectPath(g, 332, 596 + q * 26, w2[q], 9, 4.5); g.fill(); }
 
-  c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png') : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
-  function useCanvasDirect () {
-    if (source && source.img && typeof source.img.close === 'function') source.img.close();
-    source = { img:c, w:W, h:H, name:'sample.png' };
-    sourceRev++; artCache.key = ''; resetEditing();
-    $('fileChip').hidden = false; $('fileName').textContent = 'sample.png';
-    render();
-  }
+  var target = active;
+  c.toBlob ? c.toBlob(function (b) { b ? loadImage(b, 'sample.png', target) : useCanvasDirect(); }, 'image/png') : useCanvasDirect();
+  function useCanvasDirect () { finishLoad(cells[target], c, W, H, 'sample.png'); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1904,6 +2229,7 @@ function buildSeg (host, name, items, current, onPick) {
       if (!input.checked) return;
       state.color = hex;
       /* retint the selected shape, so the swatch acts on what you have chosen */
+      var shapes = cur().shapes;
       if (selected >= 0 && shapes[selected]) { pushHistory(); shapes[selected].color = hex; }
       save(); requestRender();
     });
@@ -1917,29 +2243,68 @@ fillTrack($('weight'));
 $('weight').addEventListener('input', function () {
   state.weight = parseFloat($('weight').value);
   fillTrack($('weight'));
+  var shapes = cur().shapes;
   if (selected >= 0 && shapes[selected]) shapes[selected].weight = state.weight;
   save(); requestRender();
 });
 
 $('undoBtn').addEventListener('click', undo);
 $('clearShapes').addEventListener('click', function () {
-  if (!shapes.length && !crop) return;
+  var c = cur();
+  if (!c.shapes.length && !c.crop) return;
   pushHistory();
-  shapes = []; crop = null; selected = -1; cropping = false;
-  artCache.key = '';
+  c.shapes = []; c.crop = null; selected = -1; cropping = false;
+  invalidate(c);
   setTool('select');
   toast('Annotations and crop cleared', 'ok');
 });
 $('cropDone').addEventListener('click', function () { setTool('select'); });
 $('cropReset').addEventListener('click', function () {
-  pushHistory(); crop = null; artCache.key = ''; syncEditUI(); requestRender();
+  var c = cur();
+  pushHistory(); c.crop = null; invalidate(c); syncEditUI(); requestRender();
 });
 
 buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
   state.ratio = id; save(); requestRender();
 });
 
-buildSeg($('scaleSeg'), 'scale', [{ id:'1', label:'1× — actual size' }, { id:'2', label:'2× — retina' }], String(state.scale), function (id) {
+/* Switching layouts never loses an image: a slot that drops off screen is
+   parked in memory and comes back with its crop and shapes when the layout
+   grows again. The one exception is promotion — if the only filled slot would
+   be hidden while a visible slot is empty, it moves into that slot instead of
+   vanishing. History is cleared, as a load clears it: snapshots are keyed by
+   slot index and would otherwise rewrite hidden or moved cells. */
+function setLayout (id) {
+  var lay = layoutById(id);
+  if (!lay || lay.id === state.layout) return;
+  if (cropping) setTool('select');           /* commit an open crop first */
+  drag = null; draft = null; selected = -1; history = [];
+
+  state.layout = lay.id;
+  var n = lay.cols * lay.rows;
+  ensureCells(n);
+
+  for (var i = n; i < cells.length; i++) {
+    if (!cells[i].source) continue;
+    var j = firstEmpty(n);
+    if (j < 0) break;                          /* every visible slot is taken: park it */
+    var tmp = cells[j]; cells[j] = cells[i]; cells[i] = tmp;
+  }
+
+  if (active >= n) active = 0;
+  var e = firstEmpty(n);
+  if (e >= 0) active = e;
+
+  var radio = $('layout-' + lay.id); if (radio) radio.checked = true;
+  invalidate(); syncChip(); syncEditUI(); save(); requestRender();
+}
+
+buildSeg($('layoutSeg'), 'layout', LAYOUTS, state.layout, setLayout);
+
+buildSeg($('scaleSeg'), 'scale', [
+  { id:'1', label:'1× — actual size', hint:'1× — the largest image at its native size, before the 1MB cap' },
+  { id:'2', label:'2× — retina',      hint:'2× — double resolution, before the 1MB cap' }
+], String(state.scale), function (id) {
   state.scale = parseInt(id, 10); save(); syncOutputs();
 });
 
@@ -2014,7 +2379,7 @@ function paintSwatch (cv, bg) {
   el.checked = !!state[key];
   el.addEventListener('change', function () {
     state[key] = el.checked;
-    if (key === 'edge') artCache.key = '';
+    if (key === 'edge') invalidate();
     save(); requestRender();
   });
 });
@@ -2051,12 +2416,12 @@ $('pickBtn').addEventListener('click', function () { $('filePicker').click(); })
 $('pickBtn2').addEventListener('click', function () { $('filePicker').click(); });
 $('sampleBtn').addEventListener('click', loadSample);
 $('sampleBtn2').addEventListener('click', loadSample);
-$('clearBtn').addEventListener('click', clearImage);
+$('clearBtn').addEventListener('click', function () { clearImage(); });   /* not bound directly: the event would be read as a slot index */
 $('exportBtn').addEventListener('click', doExport);
 $('copyBtn').addEventListener('click', doCopy);
 
 $('resetBtn').addEventListener('click', function () {
-  for (var k in DEFAULTS) state[k] = DEFAULTS[k];
+  for (var k in DEFAULTS) if (RESET_SKIP.indexOf(k) < 0) state[k] = DEFAULTS[k];
   syncControls();
   save(); requestRender();
   toast('Controls reset', 'ok');
@@ -2074,8 +2439,9 @@ function syncControls () {
   if (bgRadio) bgRadio.checked = true;
   var rr = document.getElementById('ratio-' + state.ratio); if (rr) rr.checked = true;
   var sr = document.getElementById('scale-' + state.scale); if (sr) sr.checked = true;
+  var lr = document.getElementById('layout-' + state.layout); if (lr) lr.checked = true;
   var custom = bgById('custom'); if (custom && custom._sw) paintSwatch(custom._sw, custom);
-  artCache.key = '';
+  invalidate();
 }
 
 $('filePicker').addEventListener('change', function (e) {
@@ -2089,23 +2455,41 @@ $('filePicker').addEventListener('change', function (e) {
 
 var veil = $('veil'), dragDepth = 0;
 
+/* With cells on screen the file lands in the slot under the cursor, so the
+   slot itself is highlighted and the full-screen veil (which would hide the
+   cells behind its blur) stays off. With nothing rendered, or a single slot,
+   the veil is the drop target as before. */
+function slotTargeting () { return visibleCount() > 1 && anyFilled(); }
+
+function setDragHover (idx) {
+  if (idx === dragHover) return;
+  dragHover = idx;
+  paintOverlay();
+}
+
 window.addEventListener('dragenter', function (e) {
   if (!hasFiles(e)) return;
-  e.preventDefault(); dragDepth++; veil.classList.add('on');
+  e.preventDefault(); dragDepth++;
+  if (slotTargeting()) { setDragHover(cellAt(e.clientX, e.clientY)); return; }
+  $('veilSub').textContent = visibleCount() > 1 ? 'It fills the first empty slot' : 'The new screenshot replaces the current one';
+  veil.classList.add('on');
 });
 window.addEventListener('dragover', function (e) {
   if (!hasFiles(e)) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  if (slotTargeting()) setDragHover(cellAt(e.clientX, e.clientY));
 });
 window.addEventListener('dragleave', function (e) {
   if (!hasFiles(e)) return;
   dragDepth = Math.max(0, dragDepth - 1);
-  if (!dragDepth) veil.classList.remove('on');
+  if (!dragDepth) { veil.classList.remove('on'); setDragHover(-1); }
 });
 window.addEventListener('drop', function (e) {
   if (!hasFiles(e)) return;
   e.preventDefault(); dragDepth = 0; veil.classList.remove('on');
+  var target = slotTargeting() ? cellAt(e.clientX, e.clientY) : -1;
+  setDragHover(-1);
   var dt = e.dataTransfer;
   if (!dt) return;
   var file = null;
@@ -2115,7 +2499,7 @@ window.addEventListener('drop', function (e) {
     }
   }
   if (!file && dt.files && dt.files.length) file = dt.files[0];
-  acceptFile(file);
+  acceptFile(file, target >= 0 ? target : active);   /* off every slot → the active one */
 });
 
 function hasFiles (e) {
@@ -2155,15 +2539,20 @@ window.addEventListener('keydown', function (e) {
       if (selected >= 0) { selected = -1; paintOverlay(); return; }
       hideToast(); return;
     }
-    if ((k === 'delete' || k === 'backspace') && selected >= 0 && shapes[selected]) {
+    if ((k === 'delete' || k === 'backspace') && selected >= 0 && cur().shapes[selected]) {
       e.preventDefault();
       pushHistory();
-      shapes.splice(selected, 1); selected = -1;
+      cur().shapes.splice(selected, 1); selected = -1;
       requestRender();
       return;
     }
     if (k === 'enter' && cropping) { e.preventDefault(); setTool('select'); return; }
-    if (source) {
+    if (k >= '1' && k <= '4') {
+      var slot = parseInt(k, 10) - 1;
+      if (slot < visibleCount() && anyFilled()) { e.preventDefault(); selectCell(slot); }
+      return;
+    }
+    if (anyFilled()) {
       for (var i = 0; i < TOOLS.length; i++) {
         if (TOOLS[i].key === k) { e.preventDefault(); setTool(TOOLS[i].id); return; }
       }
@@ -2180,7 +2569,7 @@ window.addEventListener('keydown', function (e) {
     if (isTyping(document.activeElement)) return;
     var sel = window.getSelection();
     if (sel && String(sel).length) return;      /* let a real text copy through */
-    if (!source) return;
+    if (!anyFilled()) return;
     e.preventDefault(); doCopy();
   }
 });
