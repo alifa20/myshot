@@ -122,6 +122,13 @@ button{cursor:pointer;border:none;background:none;padding:0}
 
 .shotwrap{position:relative;max-width:100%;max-height:100%;display:grid;place-items:center;min-width:0;min-height:0}
 #overlay{position:absolute;left:0;top:0;touch-action:none}
+/* the label editor: a real text field floated over the preview, styled as the
+   pill it will become (size, padding, colour are set per frame by the app) */
+.label-edit{
+  position:absolute;z-index:3;margin:0;border:0;white-space:nowrap;
+  font-weight:600;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  box-shadow:0 2px 8px -2px rgba(0,0,0,.45);caret-color:currentColor;
+}
 .stage.empty #overlay{display:none}
 #shot{
   display:block;max-width:100%;max-height:100%;
@@ -234,7 +241,7 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(-
 
 /* tool palette */
 .tools{
-  position:relative;display:grid;grid-template-columns:repeat(5,1fr);gap:3px;
+  position:relative;display:grid;grid-template-columns:repeat(6,1fr);gap:3px;
   padding:3px;border-radius:var(--r-md);background:#0C0C0E;border:1px solid var(--line);
   box-shadow:inset 0 1px 2px rgba(0,0,0,.5);
 }
@@ -580,7 +587,7 @@ input[type=color]::-moz-color-swatch{border:none;border-radius:6px}
         <span><kbd>⌘C</kbd> copy</span>
         <span><kbd>⌘V</kbd> paste</span>
         <span><kbd>⌘Z</kbd> undo</span>
-        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd> tools</span>
+        <span><kbd>V</kbd><kbd>C</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd><kbd>T</kbd> tools</span>
         <span><kbd>⌫</kbd> delete</span>
       </div>
     </div>
@@ -698,7 +705,8 @@ var TOOLS = [
   { id:'crop',    label:'Crop',    key:'c', svg:'<path d="M4.2 1.6v10.2h10.2M1.6 4.2h10.2v10.2"/>' },
   { id:'arrow',   label:'Arrow',   key:'a', svg:'<path d="M3 13 12.9 3.1M8.3 2.8h4.9v4.9"/>' },
   { id:'rect',    label:'Box',     key:'r', svg:'<rect x="2.4" y="3.6" width="11.2" height="8.8" rx="1.6"/>' },
-  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' }
+  { id:'ellipse', label:'Ellipse', key:'e', svg:'<ellipse cx="8" cy="8" rx="5.7" ry="4.7"/>' },
+  { id:'text',    label:'Text',    key:'t', svg:'<path d="M3.2 3.6h9.6M8 3.6v9"/>' }
 ];
 
 var COLORS = ['#FF453A', '#FF9F0A', '#32D74B', '#0A84FF', '#FFFFFF', '#16181B'];
@@ -731,7 +739,7 @@ function makeCell () {
     source:null,          /* { img, w, h, name } */
     rev:0,                /* bumped on every load/clear; part of both cache keys */
     crop:null,            /* {x,y,w,h} in source px, or null */
-    shapes:[],            /* {type,x1,y1,x2,y2,color,weight} */
+    shapes:[],            /* {type,x1,y1,x2,y2,color,weight}; a label is {type:'text',x1,y1,text,color,weight} */
     art:emptyCache(),
     cropCache:emptyCache()
   };
@@ -1085,6 +1093,63 @@ function shapeList (cell) {
   return (draft && cell === cur()) ? cell.shapes.concat([draft]) : cell.shapes;
 }
 
+/* ── labels ────────────────────────────────────────────────────────────────
+   A label is a one-point shape: its anchor is the pill's top-left in the
+   cell's source px, and the pill box is *measured* from the text. The box is
+   canonical across preview and both export scales because the text is
+   measured once, at a fixed reference size, and scaled — glyph advances are
+   not linear in size on the platform stack, so measuring at each size would
+   let the pill drift between 1× and 2×. */
+var TEXT_FONT = 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+var TEXT_REF = 64;                      /* px, the measurement reference size */
+var TEXT_MIN = 10;                      /* cell units — a label never shrinks past legibility */
+var measureCtx = null, measureCache = {}, measureCount = 0;
+
+function textFont (px) { return '600 ' + px + 'px ' + TEXT_FONT; }
+
+/* the text's advance width at TEXT_REF px, cached per string */
+function measureLabel (text) {
+  var hit = measureCache[text];
+  if (hit !== undefined) return hit;
+  if (!measureCtx) measureCtx = makeCanvas(1, 1).getContext('2d');
+  if (measureCount > 300) { measureCache = {}; measureCount = 0; }
+  measureCtx.font = textFont(TEXT_REF);
+  var w = measureCtx.measureText(text).width;
+  measureCache[text] = w; measureCount++;
+  return w;
+}
+
+/* font size follows the weight on the same relative scale as stroke width, so
+   labels match across both slots and every output scale */
+function textSize (L, shape) { return Math.max(TEXT_MIN, 3.2 * strokeWidth(L, shape)); }
+
+/* the pill around `text` at font size F, in F's own units: text width, side
+   padding, outer width and height — shared by the canvas pill and the editor */
+function pillGeom (F, text) {
+  var tw = measureLabel(text) * F / TEXT_REF, padX = 0.55 * F;
+  return { F:F, tw:tw, padX:padX, w:tw + padX * 2, h:1.5 * F };
+}
+
+/* the pill box for a label, in cell units (F, tw, padX, w, h) and in the
+   cell's own source px (sw, sh) — hit-testing and nudging work in source px */
+function textBox (L, slot, shape) {
+  var g = pillGeom(textSize(L, shape), shape.text);
+  g.sw = g.w / slot.k; g.sh = g.h / slot.k;
+  return g;
+}
+
+/* White or near-black text on the pill, by the fill's relative luminance. The
+   cut sits between the palette's red and blue (white text) and its orange and
+   green (dark text); a pure highest-contrast-ratio pick would put dark text on
+   red, which reads as a warning badge rather than a label. */
+var TEXT_INK_DARK = '#16181B', TEXT_INK_CUT = 0.35;
+function luminance (hex) {
+  var c = hexToRgb(hex), v = [], i;
+  for (i = 0; i < 3; i++) { var s = c[i] / 255; v.push(s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)); }
+  return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+}
+function textInk (fill) { return luminance(fill) > TEXT_INK_CUT ? TEXT_INK_DARK : '#FFFFFF'; }
+
 /* a cell's source px → output px (k scales the cell's source into cell units) */
 function mapPoint (slot, S, ax, ay, x, y) {
   return [ax + (x - slot.C.sx) * slot.k * S, ay + (y - slot.C.sy) * slot.k * S];
@@ -1096,9 +1161,9 @@ function drawShapes (g, slot, L, S, ax, ay) {
 
   for (var i = 0; i < list.length; i++) {
     var s = list[i];
+    if (editing(cell, i)) continue;              /* the field stands in for it while it is edited */
     var w = Math.max(1, strokeWidth(L, s) * S);
     var a = mapPoint(slot, S, ax, ay, s.x1, s.y1);
-    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
 
     g.save();
     g.strokeStyle = s.color; g.fillStyle = s.color;
@@ -1109,6 +1174,22 @@ function drawShapes (g, slot, L, S, ax, ay) {
     g.shadowBlur = w * 1.6;
     g.shadowOffsetY = w * 0.35;
 
+    if (s.type === 'text') {
+      var tb = textBox(L, slot, s), pw = tb.w * S, ph = tb.h * S;
+      roundRectPath(g, a[0], a[1], pw, ph, ph / 2);
+      g.fill();
+      g.shadowColor = 'transparent';           /* the pill carries the shadow, not the glyphs */
+      g.fillStyle = textInk(s.color);
+      g.font = textFont(tb.F * S);
+      g.textAlign = 'left'; g.textBaseline = 'middle';
+      /* max-width pins the glyphs to the measured inner width, so text can
+         never spill past its pill at any scale */
+      g.fillText(s.text, a[0] + tb.padX * S, a[1] + ph / 2, tb.tw * S);
+      g.restore();
+      continue;
+    }
+
+    var b = mapPoint(slot, S, ax, ay, s.x2, s.y2);
     if (s.type === 'arrow') drawArrow(g, a[0], a[1], b[0], b[1], w);
     else if (s.type === 'rect') {
       roundRectPath(g, Math.min(a[0], b[0]), Math.min(a[1], b[1]),
@@ -1313,7 +1394,7 @@ function render () {
      live during a drag and the Undo/Clear buttons can never read stale */
   syncEditUI();
   syncCellA11y();     /* also on the empty render, so stale slot text never lingers */
-  if (!L) { view = null; return; }
+  if (!L) { view = null; if (editor) closeEditor(false); return; }
 
   /* Fit the composition into the stage box, never above 1 css px per unit. */
   var cs = getComputedStyle(stage);
@@ -1350,7 +1431,8 @@ function render () {
   overlay.style.height = cssH + 'px';
   overlay.width = shot.width; overlay.height = shot.height;
   paintOverlay();
-  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : 'crosshair');
+  positionEditor();           /* the field tracks its anchor through fit and dpr changes */
+  overlay.style.cursor = cropping ? 'crosshair' : (tool === 'select' ? 'default' : tool === 'text' ? 'text' : 'crosshair');
 }
 
 /* ── overlay: crop frame + selection chrome (never exported) ───────────── */
@@ -1438,13 +1520,20 @@ function paintOverlay () {
   }
 
   var shapes = cur().shapes, vs = activeSlot();
-  if (vs && selected >= 0 && selected < shapes.length) {
+  if (vs && selected >= 0 && selected < shapes.length && !editing(cur(), selected)) {
     var s = shapes[selected];
     var a = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x1, s.y1);
-    var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
-    var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
-    var x = Math.min(a[0], b[0]) - pad, y = Math.min(a[1], b[1]) - pad;
-    var w = Math.abs(b[0] - a[0]) + pad * 2, h = Math.abs(b[1] - a[1]) + pad * 2;
+    var x, y, w, h;
+    if (s.type === 'text') {
+      /* the chrome outlines the pill itself */
+      var tb = textBox(L, vs.slot, s), tp = 3 * view.dpr;
+      x = a[0] - tp; y = a[1] - tp; w = tb.w * S + tp * 2; h = tb.h * S + tp * 2;
+    } else {
+      var b = mapPoint(vs.slot, S, vs.ax, vs.ay, s.x2, s.y2);
+      var pad = Math.max(6 * view.dpr, strokeWidth(L, s) * S);
+      x = Math.min(a[0], b[0]) - pad; y = Math.min(a[1], b[1]) - pad;
+      w = Math.abs(b[0] - a[0]) + pad * 2; h = Math.abs(b[1] - a[1]) + pad * 2;
+    }
     g.strokeStyle = 'rgba(232,160,92,.95)';
     g.lineWidth = Math.max(1, view.dpr);
     g.setLineDash([5 * view.dpr, 4 * view.dpr]);
@@ -1511,6 +1600,7 @@ function pushHistory () {
 }
 
 function undo () {
+  closeEditor(true);                  /* an open label is committed before anything is rewound */
   if (!history.length || drag) return;
   var prev = JSON.parse(history.pop());
   var changed = -1;
@@ -1582,6 +1672,12 @@ function hitShape (p, vs) {
   var L = view.L, shapes = vs.slot.cell.shapes;
   for (var i = shapes.length - 1; i >= 0; i--) {
     var s = shapes[i];
+    if (s.type === 'text') {
+      /* a label is a filled pill: hit means inside it */
+      var tb = textBox(L, vs.slot, s);
+      if (p.x >= s.x1 && p.x <= s.x1 + tb.sw && p.y >= s.y1 && p.y <= s.y1 + tb.sh) return i;
+      continue;
+    }
     /* p and tol are in this cell's source px; strokeWidth is in cell units */
     var sw = strokeWidth(L, s) / vs.slot.k;
     var tol = Math.max(tolerance(vs), sw);
@@ -1625,7 +1721,9 @@ function hitShapeAny (e) {
 }
 
 overlay.addEventListener('pointerdown', function (e) {
-  if (!view || e.button !== 0) return;
+  if (!view) return;
+  closeEditor(true);      /* before any branch: the pointer event precedes the focus change, so blur cannot be relied on to commit first */
+  if (e.button !== 0) return;
 
   /* which slot was pressed: an empty one only becomes active (and drops to
      Select — there is nothing to crop or draw on); a filled one becomes
@@ -1667,6 +1765,13 @@ overlay.addEventListener('pointerdown', function (e) {
     var hit = hitShapeAny(e);
     if (hit && hit.idx !== active) { active = hit.idx; requestRender(); }
     selected = hit ? hit.i : -1;
+    if (hit) {
+      /* a press on a shape may become a move; nothing is pushed until the
+         pointer has travelled past the stray-click tolerance */
+      var sh = cur().shapes[hit.i];
+      /* start is in the hit slot's source px — `active` may have just switched, so `p` above is not it */
+      drag = { kind:'move', i:hit.i, start:toSource(e), orig:{ x1:sh.x1, y1:sh.y1, x2:sh.x2, y2:sh.y2 }, pushed:false };
+    }
     paintOverlay();
     syncEditUI();
     return;
@@ -1675,7 +1780,13 @@ overlay.addEventListener('pointerdown', function (e) {
   /* drawing: clamp to the visible image so a shape can't be lost off-frame */
   var C = activeSlot().slot.C;
   var sx = clamp(p.x, C.sx, C.sx + C.iw), sy = clamp(p.y, C.sy, C.sy + C.ih);
+  if (tool === 'text') {
+    /* the editor opens on release (endDrag), at the press point */
+    drag = { kind:'text', at:{ x:sx, y:sy }, start:p, stray:false };
+    return;
+  }
   draft = { type:tool, x1:sx, y1:sy, x2:sx, y2:sy, color:state.color, weight:state.weight };
+
   drag = { kind:'draw' };
 });
 
@@ -1692,6 +1803,25 @@ overlay.addEventListener('pointermove', function (e) {
       draft.x2 = draft.x1 + Math.sign(draft.x2 - draft.x1 || 1) * side;
       draft.y2 = draft.y1 + Math.sign(draft.y2 - draft.y1 || 1) * side;
     }
+    requestRender();
+    return;
+  }
+
+  if (drag.kind === 'text') {
+    if (Math.hypot(p.x - drag.start.x, p.y - drag.start.y) > tolerance()) drag.stray = true;
+    return;
+  }
+
+  if (drag.kind === 'move') {
+    var ms = cur().shapes[drag.i];
+    if (!ms) return;
+    var dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+    if (!drag.pushed) {
+      if (Math.hypot(dx, dy) <= tolerance()) return;    /* a wobble is still a plain select */
+      pushHistory();                                     /* one move, one undo step */
+      drag.pushed = true;
+    }
+    moveShape(ms, drag.orig, dx, dy, activeSlot().slot);
     requestRender();
     return;
   }
@@ -1728,10 +1858,38 @@ overlay.addEventListener('pointermove', function (e) {
   }
 });
 
+/* Translate a shape from its pre-drag points by (dx, dy) in the slot's source
+   px. Clamping is per axis and applies only when the shape's box fits the
+   visible content on that axis; a shape larger than a tight crop translates
+   freely and stays clipped to the artwork as today. */
+function moveShape (s, o, dx, dy, slot) {
+  var C = slot.C, bx, by, bw, bh;
+  if (s.type === 'text') {
+    var tb = textBox(view.L, slot, s);
+    bx = o.x1; by = o.y1; bw = tb.sw; bh = tb.sh;
+  } else {
+    bx = Math.min(o.x1, o.x2); by = Math.min(o.y1, o.y2);
+    bw = Math.abs(o.x2 - o.x1); bh = Math.abs(o.y2 - o.y1);
+  }
+  if (bw <= C.iw) dx = clamp(bx + dx, C.sx, C.sx + C.iw - bw) - bx;
+  if (bh <= C.ih) dy = clamp(by + dy, C.sy, C.sy + C.ih - bh) - by;
+  s.x1 = o.x1 + dx; s.y1 = o.y1 + dy;
+  if (s.type !== 'text') { s.x2 = o.x2 + dx; s.y2 = o.y2 + dy; }
+}
+
 function endDrag () {
   if (!drag) return;
-  var kind = drag.kind;
+  var d = drag, kind = d.kind;
   drag = null;
+
+  if (kind === 'move') { syncEditUI(); requestRender(); return; }   /* history was pushed on first movement, or not at all */
+
+  if (kind === 'text') {
+    /* a press that travelled is a habitual drag from the other tools, not a
+       placement — it opens nothing */
+    if (!d.stray) openEditor(active, d.at.x, d.at.y, -1);
+    return;
+  }
 
   if (kind === 'draw') {
     var len = Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1);
@@ -1754,12 +1912,143 @@ function endDrag () {
 overlay.addEventListener('pointerup', endDrag);
 overlay.addEventListener('pointercancel', endDrag);
 
+/* double-click a label with Select to re-edit it in place */
+overlay.addEventListener('dblclick', function (e) {
+  if (!view || tool !== 'select' || drag) return;
+  var hit = hitShapeAny(e);
+  if (!hit) return;
+  var s = cells[hit.idx].shapes[hit.i];
+  if (!s || s.type !== 'text') return;
+  if (hit.idx !== active) { active = hit.idx; requestRender(); }
+  selected = hit.i;
+  openEditor(hit.idx, s.x1, s.y1, hit.i);
+});
+
+/* ── label editor ──────────────────────────────────────────────────────────
+   A DOM text field floated over the preview, styled as the pill it becomes.
+   It is never on a canvas, so it cannot reach an export. It opens on pointer
+   *release*: the browser's mousedown focus step runs after pointerdown and
+   would blur a field focused there. closeEditor() is the single exit — every
+   action that could detach the field (a press on the overlay, a slot or
+   layout switch, a load, Clear, Reset crop, undo, a tool change) calls it
+   first — and the `done` flag makes the Enter-then-blur pair commit once. */
+var editor = null;      /* { el, idx, x, y, shape (index into the slot's shapes, or -1), F, done } */
+var editEl = null;
+
+function editorEl () {
+  if (editEl) return editEl;
+  var el = document.createElement('input');
+  el.type = 'text'; el.id = 'labelEdit'; el.className = 'label-edit';
+  el.maxLength = 120; el.spellcheck = false; el.autocomplete = 'off';
+  el.setAttribute('aria-label', 'Label text');
+  el.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); closeEditor(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeEditor(false); }
+  });
+  el.addEventListener('input', sizeEditor);
+  el.addEventListener('blur', function () { closeEditor(true); });
+  editEl = el;
+  return el;
+}
+
+/* is shape i of `cell` the one currently in the editor? */
+function editing (cell, i) { return !!editor && editor.shape === i && cells[editor.idx] === cell; }
+
+/* colour and weight the field shows: the edited label's own, or the palette's for a new one */
+function editorLook () {
+  var s = editor.shape >= 0 ? cells[editor.idx].shapes[editor.shape] : null;
+  return { color: s ? s.color : state.color, weight: s ? s.weight : state.weight };
+}
+
+/* open at (x, y) in slot idx's source px; shapeIdx >= 0 re-edits that label */
+function openEditor (idx, x, y, shapeIdx) {
+  closeEditor(true);
+  var el = editorEl(), c = cells[idx];
+  var s = shapeIdx >= 0 ? c.shapes[shapeIdx] : null;
+  editor = { el:el, idx:idx, x:x, y:y, shape:shapeIdx, F:0, done:false };
+  el.value = s ? s.text : '';
+  $('shotWrap').appendChild(el);
+  positionEditor();
+  el.focus();
+  var n = el.value.length;
+  try { el.setSelectionRange(n, n); } catch (e) {}
+  requestRender();                    /* the edited pill hides under the field */
+}
+
+/* place and style the field from the slot's geometry in the last paint */
+function positionEditor () {
+  if (!editor || !view) return;
+  var vs = null;
+  for (var i = 0; i < view.slots.length; i++) if (view.slots[i].idx === editor.idx) vs = view.slots[i];
+  if (!vs) { closeEditor(false); return; }          /* its slot emptied under it */
+  var look = editorLook(), el = editor.el;
+  var F = textSize(view.L, look) * view.fit;         /* css px, the pill's font at preview scale */
+  var pg = pillGeom(F, '');                          /* the same padding, height and radius as the pill */
+  var a = mapPoint(vs.slot, view.S, vs.ax, vs.ay, editor.x, editor.y);
+  el.style.left = (a[0] / view.dpr) + 'px';
+  el.style.top = (a[1] / view.dpr) + 'px';
+  el.style.height = el.style.lineHeight = pg.h + 'px';
+  el.style.padding = '0 ' + pg.padX + 'px';
+  el.style.borderRadius = (pg.h / 2) + 'px';
+  el.style.fontSize = F + 'px';
+  el.style.background = look.color;
+  el.style.color = textInk(look.color);
+  editor.F = F;
+  sizeEditor();
+}
+
+/* the field's width is its own: the text so far plus padding and caret room */
+function sizeEditor () {
+  if (!editor) return;
+  var F = editor.F || TEXT_MIN;
+  editor.el.style.width = (pillGeom(F, editor.el.value || ' ').w + 0.6 * F) + 'px';
+
+}
+
+/* the one exit: commit non-empty text (nudged inside the image), discard
+   empty text, remove the field */
+function closeEditor (commit) {
+  if (!editor || editor.done) return;
+  var ed = editor;
+  ed.done = true; editor = null;
+  var text = ed.el.value.trim();
+  if (ed.el.parentNode) ed.el.parentNode.removeChild(ed.el);   /* may fire blur: re-entry is a no-op */
+  var c = cells[ed.idx];
+  if (commit && text && c && c.source) {
+    if (ed.shape >= 0) {
+      var s = c.shapes[ed.shape];
+      if (s && s.text !== text) { pushHistory(); s.text = text; nudgeLabel(c, s); }
+    } else {
+      var label = { type:'text', x1:ed.x, y1:ed.y, text:text, color:state.color, weight:state.weight };
+      pushHistory();
+      nudgeLabel(c, label);
+      c.shapes.push(label);
+    }
+  }
+  syncEditUI(); requestRender();
+}
+
+/* Move the anchor so the whole pill lies inside the image's visible content.
+   A pill wider or taller than the image is left at the near edge and clipped,
+   since it cannot fit. */
+function nudgeLabel (cell, s) {
+  var L = layout(), slot = null;
+  if (!L) return;
+  for (var i = 0; i < L.slots.length; i++) if (L.slots[i].cell === cell) slot = L.slots[i];
+  if (!slot) return;
+  var tb = textBox(L, slot, s), C = slot.C;
+  s.x1 = tb.sw <= C.iw ? clamp(s.x1, C.sx, C.sx + C.iw - tb.sw) : C.sx;
+  s.y1 = tb.sh <= C.ih ? clamp(s.y1, C.sy, C.sy + C.ih - tb.sh) : C.sy;
+}
+
+
 function cropOrFull () {
   var c = cur();
   return c.crop || { x:0, y:0, w:c.source.w, h:c.source.h };
 }
 
 function setTool (id) {
+  if (id !== 'text') closeEditor(true);                 /* leaving Text commits an open label */
   if (id === 'crop' && !cur().source) id = 'select';   /* nothing to crop in an empty slot */
   tool = id;                        /* leaving crop mode commits the pending crop */
   cropping = (id === 'crop');
@@ -1783,6 +2072,7 @@ function setTool (id) {
    would), then re-opened on the target if it holds an image; an empty target
    drops to Select, since there is nothing to crop. */
 function selectCell (idx) {
+  closeEditor(true);
   if (drag) return;                                   /* never mid-gesture: the drag owns draft */
   if (idx < 0 || idx >= visibleCount() || !cells[idx]) return;
   var wasCropping = cropping;
@@ -1814,8 +2104,13 @@ function syncEditUI () {
     var r = cropOrFull();
     $('cropDims').textContent = fmt(r.w) + ' × ' + fmt(r.h);
   }
-  $('undoBtn').setAttribute('aria-disabled', history.length ? 'false' : 'true');
-  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop) ? 'false' : 'true');
+  /* a label being typed counts as content: Undo and Clear all stay reachable,
+     and either one commits it first (a disabled button would swallow the
+     click and leave the label standing) */
+  var pending = !!editor;
+  $('undoBtn').setAttribute('aria-disabled', (history.length || pending) ? 'false' : 'true');
+  $('clearShapes').setAttribute('aria-disabled', (c.shapes.length || c.crop || pending) ? 'false' : 'true');
+
 }
 
 /* A new image in a cell means that cell's crop and shapes are meaningless; the
@@ -1993,6 +2288,7 @@ function stamp () {
 
 var lastBlobUrl = null;
 function doExport () {
+  closeEditor(true);                  /* a label being typed goes into the PNG; blur alone is not fired by every browser's button click */
   if (!anyFilled()) return;
   var r;
   try { r = renderBudgeted(); }
@@ -2010,7 +2306,9 @@ function doExport () {
 }
 
 function doCopy () {
+  closeEditor(true);                  /* synchronous, so the clipboard write stays inside the user gesture */
   if (!anyFilled()) return;
+
 
   if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') {
     return copyFailed('This browser can’t write images to the clipboard.');
@@ -2054,6 +2352,7 @@ function acceptFile (file, idx) {
 /* The one place an image lands in a cell — the normal decode path and the
    sample's canvas fallback both end here. */
 function setSource (cell, img, w, h, name) {
+  closeEditor(true);                  /* an open label lands in its own slot first */
   if (cropping) setTool('select');    /* commit an open crop before anything moves */
   if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
   cell.source = { img:img, w:w, h:h, name:name };
@@ -2100,6 +2399,7 @@ function loadImage (blob, name, idx) {
 
 function clearImage (idx) {
   var cell = cells[idx === undefined ? active : idx];
+  closeEditor(true);
   if (cropping) setTool('select');
   if (cell.source && cell.source.img && typeof cell.source.img.close === 'function') cell.source.img.close();
   cell.source = null; cell.rev++;
@@ -2250,6 +2550,7 @@ $('weight').addEventListener('input', function () {
 
 $('undoBtn').addEventListener('click', undo);
 $('clearShapes').addEventListener('click', function () {
+  closeEditor(true);
   var c = cur();
   if (!c.shapes.length && !c.crop) return;
   pushHistory();
@@ -2260,6 +2561,7 @@ $('clearShapes').addEventListener('click', function () {
 });
 $('cropDone').addEventListener('click', function () { setTool('select'); });
 $('cropReset').addEventListener('click', function () {
+  closeEditor(true);
   var c = cur();
   pushHistory(); c.crop = null; invalidate(c); syncEditUI(); requestRender();
 });
@@ -2277,6 +2579,7 @@ buildSeg($('ratioSeg'), 'ratio', RATIOS, state.ratio, function (id) {
 function setLayout (id) {
   var lay = layoutById(id);
   if (!lay || lay.id === state.layout) return;
+  closeEditor(true);                         /* commit an open label into its slot first */
   if (cropping) setTool('select');           /* commit an open crop first */
   drag = null; draft = null; selected = -1; history = [];
 
@@ -2510,6 +2813,7 @@ function hasFiles (e) {
 }
 
 window.addEventListener('paste', function (e) {
+  if (isTyping(document.activeElement)) return;   /* a paste into a text field is the field's */
   var items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
   for (var i = 0; i < items.length; i++) {
@@ -2561,13 +2865,14 @@ window.addEventListener('keydown', function (e) {
   }
 
   if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  if (isTyping(document.activeElement)) return;   /* the field owns ⌘Z, ⌘S, ⌘O and ⌘C while it has focus */
 
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
   if (k === 's') { e.preventDefault(); doExport(); return; }
   if (k === 'o') { e.preventDefault(); $('filePicker').click(); return; }
   if (k === 'c') {
-    if (isTyping(document.activeElement)) return;
     var sel = window.getSelection();
+
     if (sel && String(sel).length) return;      /* let a real text copy through */
     if (!anyFilled()) return;
     e.preventDefault(); doCopy();
