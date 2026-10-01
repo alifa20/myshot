@@ -442,6 +442,13 @@ pre-text build after U1, U2 and U3. Console clean, zero network requests, Lighth
    12–88 % rectangle *moves* it rather than drawing a new one; and an ellipse spanning 800–1200 in a
    1280-wide image cannot move 100 px right — it clamps at 880, which is the plan's per-axis rule
    working as written.
+4. Found by the code review (a cross-harness adversarial read agreed): **Export** and **Copy** relied
+   on the button click blurring the field to commit an open label. Chrome does blur, and the suite
+   passed, but WebKit does not move focus on a button click, and a programmatic `doExport()` never
+   blurs anything — so a label still being typed, or one hidden under the field while re-edited,
+   would be silently missing from the PNG. Both entry points now call `closeEditor(true)` first, like
+   every other detaching action, and the suite drives a programmatic export with the editor open.
+
 
 **Observed, not changed.** Reset crop is listed as an interruption in the plan, but the crop bar is only
 visible while cropping and the Text tool cannot be active then, so the path is unreachable from the UI;

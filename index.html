@@ -129,7 +129,6 @@ button{cursor:pointer;border:none;background:none;padding:0}
   font-weight:600;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   box-shadow:0 2px 8px -2px rgba(0,0,0,.45);caret-color:currentColor;
 }
-.label-edit:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .stage.empty #overlay{display:none}
 #shot{
   display:block;max-width:100%;max-height:100%;
@@ -1124,13 +1123,19 @@ function measureLabel (text) {
    labels match across both slots and every output scale */
 function textSize (L, shape) { return Math.max(TEXT_MIN, 3.2 * strokeWidth(L, shape)); }
 
+/* the pill around `text` at font size F, in F's own units: text width, side
+   padding, outer width and height — shared by the canvas pill and the editor */
+function pillGeom (F, text) {
+  var tw = measureLabel(text) * F / TEXT_REF, padX = 0.55 * F;
+  return { F:F, tw:tw, padX:padX, w:tw + padX * 2, h:1.5 * F };
+}
+
 /* the pill box for a label, in cell units (F, tw, padX, w, h) and in the
    cell's own source px (sw, sh) — hit-testing and nudging work in source px */
 function textBox (L, slot, shape) {
-  var F = textSize(L, shape);
-  var tw = measureLabel(shape.text) * F / TEXT_REF;
-  var padX = 0.55 * F, w = tw + padX * 2, h = 1.5 * F;
-  return { F:F, tw:tw, padX:padX, w:w, h:h, sw:w / slot.k, sh:h / slot.k };
+  var g = pillGeom(textSize(L, shape), shape.text);
+  g.sw = g.w / slot.k; g.sh = g.h / slot.k;
+  return g;
 }
 
 /* White or near-black text on the pill, by the fill's relative luminance. The
@@ -1764,6 +1769,7 @@ overlay.addEventListener('pointerdown', function (e) {
       /* a press on a shape may become a move; nothing is pushed until the
          pointer has travelled past the stray-click tolerance */
       var sh = cur().shapes[hit.i];
+      /* start is in the hit slot's source px — `active` may have just switched, so `p` above is not it */
       drag = { kind:'move', i:hit.i, start:toSource(e), orig:{ x1:sh.x1, y1:sh.y1, x2:sh.x2, y2:sh.y2 }, pushed:false };
     }
     paintOverlay();
@@ -1926,7 +1932,7 @@ overlay.addEventListener('dblclick', function (e) {
    action that could detach the field (a press on the overlay, a slot or
    layout switch, a load, Clear, Reset crop, undo, a tool change) calls it
    first — and the `done` flag makes the Enter-then-blur pair commit once. */
-var editor = null;      /* { el, idx, x, y, shape (index into the slot's shapes, or -1), orig, F, done } */
+var editor = null;      /* { el, idx, x, y, shape (index into the slot's shapes, or -1), F, done } */
 var editEl = null;
 
 function editorEl () {
@@ -1959,8 +1965,8 @@ function openEditor (idx, x, y, shapeIdx) {
   closeEditor(true);
   var el = editorEl(), c = cells[idx];
   var s = shapeIdx >= 0 ? c.shapes[shapeIdx] : null;
-  editor = { el:el, idx:idx, x:x, y:y, shape:shapeIdx, orig:s ? s.text : '', F:0, done:false };
-  el.value = editor.orig;
+  editor = { el:el, idx:idx, x:x, y:y, shape:shapeIdx, F:0, done:false };
+  el.value = s ? s.text : '';
   $('shotWrap').appendChild(el);
   positionEditor();
   el.focus();
@@ -1977,12 +1983,13 @@ function positionEditor () {
   if (!vs) { closeEditor(false); return; }          /* its slot emptied under it */
   var look = editorLook(), el = editor.el;
   var F = textSize(view.L, look) * view.fit;         /* css px, the pill's font at preview scale */
+  var pg = pillGeom(F, '');                          /* the same padding, height and radius as the pill */
   var a = mapPoint(vs.slot, view.S, vs.ax, vs.ay, editor.x, editor.y);
   el.style.left = (a[0] / view.dpr) + 'px';
   el.style.top = (a[1] / view.dpr) + 'px';
-  el.style.height = el.style.lineHeight = (1.5 * F) + 'px';
-  el.style.padding = '0 ' + (0.55 * F) + 'px';
-  el.style.borderRadius = (0.75 * F) + 'px';
+  el.style.height = el.style.lineHeight = pg.h + 'px';
+  el.style.padding = '0 ' + pg.padX + 'px';
+  el.style.borderRadius = (pg.h / 2) + 'px';
   el.style.fontSize = F + 'px';
   el.style.background = look.color;
   el.style.color = textInk(look.color);
@@ -1994,8 +2001,8 @@ function positionEditor () {
 function sizeEditor () {
   if (!editor) return;
   var F = editor.F || TEXT_MIN;
-  var tw = measureLabel(editor.el.value || ' ') * F / TEXT_REF;
-  editor.el.style.width = (tw + 1.7 * F) + 'px';
+  editor.el.style.width = (pillGeom(F, editor.el.value || ' ').w + 0.6 * F) + 'px';
+
 }
 
 /* the one exit: commit non-empty text (nudged inside the image), discard
@@ -2281,6 +2288,7 @@ function stamp () {
 
 var lastBlobUrl = null;
 function doExport () {
+  closeEditor(true);                  /* a label being typed goes into the PNG; blur alone is not fired by every browser's button click */
   if (!anyFilled()) return;
   var r;
   try { r = renderBudgeted(); }
@@ -2298,7 +2306,9 @@ function doExport () {
 }
 
 function doCopy () {
+  closeEditor(true);                  /* synchronous, so the clipboard write stays inside the user gesture */
   if (!anyFilled()) return;
+
 
   if (!navigator.clipboard || typeof window.ClipboardItem !== 'function') {
     return copyFailed('This browser can’t write images to the clipboard.');

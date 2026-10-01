@@ -76,7 +76,8 @@ Pick a tool once, then drag on the preview. `V` select · `C` crop · `A` arrow 
   is selected retints that shape. While you are typing a label the text field owns the keyboard —
   tool keys, `⌫`, `⌘Z`, `⌘S`, `⌘O`, `⌘C` and image paste all go to the field — and any action that
   would move away from it (a click on the stage, a layout switch, a load, **Clear**, undo, another
-  tool) commits it first.
+  tool, **Export** or **Copy**) commits it first.
+
 
 Annotations are stored in the **source image's own pixels** (each slot's own, in two-up), not screen
 coordinates, so they stay anchored to whatever they point at through cropping, ratio changes, layout
